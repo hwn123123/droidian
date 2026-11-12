@@ -6,6 +6,7 @@ import shlex
 import socket
 import subprocess
 import time
+import zlib
 from pathlib import Path
 
 STAGE = "/tmp/dri"
@@ -57,6 +58,10 @@ def main():
     available = int(shell("df -k /tmp | tail -n 1").split()[3]) * 1024
     if total + 512 * 1024**2 > available:
         raise RuntimeError("Not enough REC RAM for this payload")
+    memory = dict(line.split(":", 1) for line in shell("cat /proc/meminfo").splitlines())
+    memory_available = int(memory["MemAvailable"].split()[0]) * 1024
+    if total + 1024**3 > memory_available:
+        raise RuntimeError("REC needs at least 1 GiB free after staging this payload")
     root("mkdir -p " + STAGE)
     subprocess.run(adb + ["forward", "tcp:" + str(PORT), "tcp:" + str(PORT)], check=True)
 
@@ -64,12 +69,19 @@ def main():
         # The existing REC policy permits an authenticated root receiver, but
         # forbids adbd creating files on tmpfs. Bind to loopback, use one
         # connection, and carry it only over this USB ADB forward.
-        root(f"nc -ls127.0.0.1 -p{PORT} sh -c 'cat >{STAGE}/in' &")
+        compressed = path.stat().st_size > 256 * 1024**2
+        receiver = "gzip -dc" if compressed else "cat"
+        root(f"nc -ls127.0.0.1 -p{PORT} sh -c '{receiver} >{STAGE}/in' &")
         with socket.create_connection(("127.0.0.1", PORT), timeout=15) as connection:
             connection.settimeout(180)
+            compressor = zlib.compressobj(1, wbits=31) if compressed else None
             with path.open("rb") as stream:
                 for block in iter(lambda: stream.read(1024**2), b""):
-                    connection.sendall(block)
+                    data = compressor.compress(block) if compressor else block
+                    if data:
+                        connection.sendall(data)
+            if compressor:
+                connection.sendall(compressor.flush())
             connection.shutdown(socket.SHUT_WR)
             while connection.recv(1024):
                 pass

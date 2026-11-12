@@ -21,6 +21,8 @@ bash "$here/prepare-device-root.sh" "$out/root" "$key"
 sync "$out/root"
 umount "$out/root"
 e2fsck -f -p "$raw"
-img2simg "$raw" "$out/linux_root-droidian.simg"
+# The raw file keeps the full partition geometry but is sparse on the host.
+# Skip holes instead of reading 200 GiB of unwritten blocks.
+img2simg -s "$raw" "$out/linux_root-droidian.simg"
 (cd "$out" && sha256sum linux_root-droidian.simg > SHA256SUMS)
 echo "Device image built at $out/linux_root-droidian.simg (200 GiB ext4 geometry)."
