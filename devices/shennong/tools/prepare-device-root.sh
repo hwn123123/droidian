@@ -46,9 +46,20 @@ rm -r "$root/var/cache/shennong-adaptation"
 
 uid=$(awk -F: '$1=="droidian"{print $3}' "$root/etc/passwd")
 gid=$(awk -F: '$1=="droidian"{print $4}' "$root/etc/passwd")
-[[ $uid == 1000 && -n $gid ]]
-install -d -m700 -o "$uid" -g "$gid" "$root/home/droidian/.ssh"
-install -m600 -o "$uid" -g "$gid" "$key" "$root/home/droidian/.ssh/authorized_keys"
+# Current Droidian moves its desktop user out of the Android AID range.
+# Keep that upstream account mapping rather than forcing the old UID 1000.
+[[ $uid =~ ^[0-9]+$ && $gid =~ ^[0-9]+$ && $uid -ge 1000 && $uid -lt 65534 ]]
+install -d -m700 "$root/home/droidian/.ssh"
+install -m600 "$key" "$root/home/droidian/.ssh/authorized_keys"
+# Use numeric ownership directly: the builder need not have Droidian's user
+# in its own passwd database (some install implementations require that).
+python3 - "$root/home/droidian/.ssh" "$uid" "$gid" <<'PY'
+import os,sys
+from pathlib import Path
+directory=Path(sys.argv[1]);uid=int(sys.argv[2]);gid=int(sys.argv[3])
+for path in (directory,directory/'authorized_keys'):
+    os.chown(path,uid,gid)
+PY
 for path in "$root/etc/ssh/ssh_host_"*; do [ ! -f "$path" ] || rm "$path"; done
 systemctl --root="$root" enable shennong-vendor.service shennong-touch.service \
     shennong-adsp.service shennong-graphics.service shennong-usb-network.service \
