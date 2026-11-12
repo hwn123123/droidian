@@ -17,7 +17,10 @@ log() {
 mode=/sys/bus/platform/devices/a600000.ssusb/mode
 role=/sys/class/usb_role/a600000.ssusb-role-switch/role
 if [ -w "$mode" ]; then
-    printf 'peripheral\n' > "$mode"
+    current_mode=$(cat "$mode")
+    if [ "$current_mode" != peripheral ] || [ ! -e /sys/class/udc/a600000.dwc3 ]; then
+        printf 'peripheral\n' > "$mode"
+    fi
     log "USB vendor mode: $(cat "$mode")"
 elif [ -w "$role" ]; then
     current_role=$(cat "$role")

@@ -1,0 +1,11 @@
+# Keep the stock vendor Binder protocol and service binary. The dedicated
+# Linux host boots with selinux=0; asking Binder to attach an unavailable SID
+# otherwise fails with EOPNOTSUPP before display.qservice can register.
+service vndservicemanager /vendor/bin/vndservicemanager /dev/vndbinder
+    override
+    setenv LD_PRELOAD /vendor/lib64/libselinux_stubs.so:/vendor/lib64/libshennong-binder-compat.so
+    setenv SHENNONG_BINDER_NO_SECCTX 1
+    class core
+    user system
+    group system readproc
+    shutdown critical

@@ -43,6 +43,7 @@ mkdir -p "$root/var/cache/shennong-adaptation"
 cp "$work/"*.deb "$root/var/cache/shennong-adaptation/"
 chroot "$root" /bin/sh -c 'dpkg --force-confnew -i /var/cache/shennong-adaptation/*.deb'
 rm -r "$root/var/cache/shennong-adaptation"
+bash "$here/install-binder-compat.sh" "$root"
 
 uid=$(awk -F: '$1=="droidian"{print $3}' "$root/etc/passwd")
 gid=$(awk -F: '$1=="droidian"{print $4}' "$root/etc/passwd")
@@ -63,7 +64,8 @@ PY
 for path in "$root/etc/ssh/ssh_host_"*; do [ ! -f "$path" ] || rm "$path"; done
 systemctl --root="$root" enable shennong-vendor.service shennong-touch.service \
     shennong-adsp.service shennong-graphics.service shennong-usb-network.service \
-    shennong-ssh-hostkeys.service ssh.service
+    shennong-ssh-hostkeys.service ssh.service phosh.service lxc@android.service
+systemctl --root="$root" set-default graphical.target
 chroot "$root" usermod -a -G video,render droidian
 systemctl --root="$root" mask hybris-usb.service mobian-usb-gadget.service \
     umtp-responder.service usb-tethering.service lxc-net.service lxc.service
@@ -76,5 +78,8 @@ mkdir -p "$root/etc/NetworkManager/conf.d"
 printf '[keyfile]\nunmanaged-devices=interface-name:usb0\n' > \
     "$root/etc/NetworkManager/conf.d/99-shennong-usb0-unmanaged.conf"
 printf '/dev/disk/by-partlabel/linux_root / ext4 defaults,noatime 0 1\n' > "$root/etc/fstab"
+mkdir -p "$root/var/lib/systemd/timesync"
+# Let systemd use the build time as its normal offline clock floor.
+touch "$root/var/lib/systemd/timesync/clock"
 chroot "$root" dpkg --audit
 echo 'Offline device root prepared; boot and display validation are still required.'

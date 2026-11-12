@@ -25,8 +25,9 @@ It preserves stock SysV IPC, user-namespace and cgroup-controller settings
 while adding PID namespaces and the facilities needed by the standard display
 session. The device's LXC config inherits the host IPC/user context through
 the upstream `lxc.namespace.keep` setting and retains separate PID/mount
-namespaces. This still requires a real kernel/module ABI check and boot test;
-it is not a claim of support for the broader Halium profile.
+namespaces. All 1,118 captured modules passed the kernel import/CRC checks,
+and the device subsequently booted this display profile. This does not claim
+support for the broader Halium profile.
 
 Droidian's `next` snapshot has API 34 metapackages, Android 14 GSI and the
 AIDL-capable libhybris build. The `current` snapshot inspected on 2026-11-12
@@ -75,7 +76,8 @@ renderer and desktop patches are not part of this display validation.
 ## Build
 
 The arm64 Linux builder needs `debos`, `debootstrap`, `debhelper`, `fakeroot`,
-Python 3 and `gpgv`. Build the config packages and an upstream Droidian rootfs:
+Clang/LLD, binutils, Python 3 and `gpgv`. Build the config packages and an
+upstream Droidian rootfs:
 
 ```sh
 sudo bash devices/shennong/tools/build-rootfs.sh
@@ -127,6 +129,10 @@ sudo bash devices/shennong/tools/build-device-image.sh \
 The result has the existing 200 GiB ext4 geometry. The Debian adaptation
 package owns hardware setup, mount ordering and the USB management link;
 desktop settings remain under Phosh. No Android userdata mount is used.
+Image preparation also builds `compat/binder-no-secctx.c` against the image's
+own Bionic runtime and installs its output in the private vendor overlay.
+`install-binder-compat.sh` mounts that Android image read-only for the build;
+no proprietary libraries or compiled compatibility binaries are stored in Git.
 `build-boot-images.sh` repacks captured B boot images and preserves their REC
 dispatcher. Neither offline builder accesses a phone partition.
 
@@ -171,12 +177,46 @@ chroot alone left the mount namespace rooted in initramfs. Android APEX's
 The B initramfs now moves the Linux root onto `/` before entering it. The
 next real boot passed that failure and started Android services.
 
-APEX then rejected duplicate versioned mounts. The container configuration
-now inherits the dedicated root's APEX tree once, omitting the generic second
-`/apex` bind. After starting this configuration the USB management link became
-unresponsive; its cause and the stability of the container remain under
-investigation. Read the persistent boot/kernel records from REC before
-claiming this change has fixed APEX startup.
+APEX rejected duplicate versioned mounts. The container configuration now
+inherits the dedicated root's APEX tree once, omitting the generic second
+`/apex` bind. Real container testing subsequently reached `apexd.status=ready`.
+Linux owns driver loading, system time and the management network; the Android
+container drops the corresponding capabilities and uses a separate network
+namespace for this display milestone. The start helper verifies the required
+host display/input/ADSP drivers before delivering the vendor's module-ready
+property. This is not validation of every vendor peripheral.
 
-Physical boot/display validation is in progress. This is a development port,
-not a verified solution to the visible tearing problem.
+The stock vendor service manager requested Binder security contexts, but the
+SELinux-disabled Linux host cannot supply them. The kernel rejected calls
+with `EOPNOTSUPP` at the security-context conversion, preventing
+`display.qservice` registration. The device compatibility library removes
+only that context-manager request flag, only when explicitly opted in through
+the device's vendor init override. It forwards all other ioctl arguments
+unchanged. The original service binary and vendor Binder protocol are kept;
+substituting the framework service manager failed the vendor parcel format.
+No kernel Binder patch or proprietary binary modification is involved.
+
+After this change the stock composer opened DRM and reported the native
+1440x3200 output at 60 Hz. The EGL subdriver also needs `vendor/lib64/egl` in
+the libhybris search path. Early-ramdisk firmware hides the vendor firmware
+directory, so the device mount helper retains the raw vendor firmware as an
+additional kernel search directory. The GPU then initialized successfully:
+EGL 1.5, 72 configurations, OpenGL ES 3.2 and Adreno 750. Phoc started its
+GLES2 renderer and the Phosh session instead of falling back to Pixman.
+
+On 2026-11-12, a real B-slot boot automatically established USB SSH, started
+the Android container and opened the Phosh desktop. The owner confirmed that
+the physical display works and the horizontal line seen with Kali no longer
+appears in this initial test. Touch interaction also works. This validates
+the new display path; longer-term display, suspend and peripheral testing
+remain separate work.
+
+A live package upgrade had unexpectedly restarted the hardware units and
+disconnected USB. Package scripts now leave these units running on upgrades,
+and this layout's LXC stop override avoids generic host power-control and
+super-mapper teardown. The corrected package was installed without losing
+USB or restarting the desktop. Persistent journal records are bounded to
+64 MiB; hardware errors are not filtered out.
+
+This remains a development port. Wi-Fi, cellular, audio, cameras, charging
+and suspend have not yet passed a complete Droidian hardware validation.

@@ -1,0 +1,30 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# The host owns driver loading; hand readiness to the original Android init.
+set -euo pipefail
+grep -qw 'selinux=0' /proc/cmdline || {
+    echo 'The display profile requires its SELinux-disabled Linux host' >&2
+    exit 1
+}
+[ -s /usr/lib/droid-vendor-overlay/lib64/libshennong-binder-compat.so ] || {
+    echo 'The device Binder compatibility library was not built into the image' >&2
+    exit 1
+}
+for module in msm_drm msm_kgsl synaptics_tcm2 xiaomi_touch adsp_loader_dlkm; do
+    [ -d "/sys/module/$module" ] || {
+        echo "Required host driver is not ready: $module" >&2
+        exit 1
+    }
+done
+if [ "$(lxc-info -n android -sH 2>/dev/null || true)" != RUNNING ]; then
+    lxc-start -d -n android -f /etc/lxc/shennong-android.conf
+fi
+for ((attempt=0; attempt<30; attempt++)); do
+    if timeout 2 lxc-attach -n android -- /system/bin/setprop vendor.all.modules.ready 1; then
+        echo 'Host drivers verified; Android module-ready notification delivered'
+        exit 0
+    fi
+    sleep 1
+done
+echo 'Android property service did not accept driver readiness' >&2
+exit 1

@@ -36,8 +36,10 @@ mount_private_vendor() {
         [ -d "$source" ] || continue
         bind_tree "$source" "/vendor/$name"
     done
+    # The early ramdisk firmware bind does not contain Adreno's SQE/AQE
+    # images. Preserve access to the captured vendor image underneath it.
     [ ! -w /sys/module/firmware_class/parameters/path ] || \
-        printf '%s' '/vendor/firmware_mnt/image,/vendor/firmware_mnt/image/kiwi,/vendor/firmware' \
+        printf '%s' '/run/shennong-images/vendor/firmware,/vendor/firmware_mnt/image,/vendor/firmware_mnt/image/kiwi,/vendor/firmware' \
             > /sys/module/firmware_class/parameters/path
     # Persist contains calibration. The display experiment needs read access.
     for path in /dev/disk/by-partlabel/persist /dev/block/by-name/persist; do

@@ -2,3 +2,9 @@
 
 %:
 	dh $@
+
+# These services own live hardware, private vendor mounts and the USB link.
+# Package upgrades must not stop/restart them underneath the Android container.
+# Boot activation is explicit in the device-image preparation step.
+override_dh_installsystemd:
+	dh_installsystemd --no-start --no-stop-on-upgrade
