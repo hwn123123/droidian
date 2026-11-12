@@ -1,0 +1,32 @@
+{
+  "device": "shennong",
+  "vendor_vndk": "34",
+  "vendor_fingerprint": "Xiaomi/shennong/shennong:14/UKQ1.240624.001/OS3.0.309.0.WNBCNXM:user/release-keys",
+  "kernel_release": "6.1.138-android14-11-g0c3d559bcd85-ab14529422",
+  "images": {
+    "vendor": {
+      "filename": "vendor.img",
+      "size": 469491712,
+      "sha256": "1d18cf63966f8105c47a5018c6912f2aab5666d4895d40fea9dbf4231562ab43",
+      "filesystem": "erofs"
+    },
+    "odm": {
+      "filename": "odm.img",
+      "size": 2308399104,
+      "sha256": "b6abf83176bec71ef03849bda7b8b29b178836649f053803e246f43331f04531",
+      "filesystem": "erofs"
+    },
+    "vendor_dlkm": {
+      "filename": "vendor_dlkm.img",
+      "size": 30167040,
+      "sha256": "5a3e79378e44ebe648be75d4fee1b7b70cddf8e701dd3221a969b4814a6cda47",
+      "filesystem": "erofs"
+    },
+    "system_dlkm": {
+      "filename": "system_dlkm.img",
+      "size": 14569472,
+      "sha256": "5fc9d313eb4aa72dfb19395ad63c9d3294d586fba1554b6d78cb0725969545f5",
+      "filesystem": "erofs"
+    }
+  }
+}

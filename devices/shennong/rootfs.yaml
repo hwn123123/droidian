@@ -1,0 +1,39 @@
+{{- $image := or .image "droidian-shennong-rootfs.tar.gz" -}}
+
+architecture: arm64
+actions:
+  - action: recipe
+    description: Build upstream Droidian API 34 with the HWCOMPOSER phone stack
+    recipe: ../../rootfs-templates/droidian_phosh.yaml
+    variables:
+      architecture: arm64
+      apilevel: 34
+      version: next
+      variant: phone
+      droidian_version: next
+      username: droidian
+      password: "123"
+      hostname: shennong
+
+  - action: apt
+    description: Install the upstream display integration and Chinese fonts
+    chroot: true
+    packages:
+      - adaptation-hybris-phosh
+      - fonts-noto-cjk
+      - locales
+
+  - action: overlay
+    description: Stage locally built adaptation packages
+    source: ../../out/shennong/rootfs-overlay
+    destination: /
+
+  - action: run
+    description: Install the shennong adaptation and writable locale defaults
+    chroot: true
+    script: tools/configure-rootfs.sh
+
+  - action: pack
+    description: Export a rootfs archive for the dedicated linux_root partition
+    file: {{ $image }}
+    compression: gz

@@ -1,0 +1,22 @@
+{
+  "boot_b": {
+    "size": 100663296,
+    "sha256": "1dab6b5799ed7db7e84648e761981b2001e5b5b22dee1fac040a97b2c337e923"
+  },
+  "init_boot_b": {
+    "size": 8388608,
+    "sha256": "1152c08731de2a7d9c24becd6d6f0fd3547d483ca39da60eb0a42cd6b73eac0e"
+  },
+  "vendor_boot_b": {
+    "size": 100663296,
+    "sha256": "fa76ce6443584d6f254ea9b5dd0073e3bfda4d6d77f7f689bb2c409317d75890"
+  },
+  "dtbo_b": {
+    "size": 25165824,
+    "sha256": "2300821865c3dff04c2e25f0ec0cd6bc460c03e1176202ad2b87623a92c6eaf1"
+  },
+  "vbmeta_b": {
+    "size": 131072,
+    "sha256": "ea3e5dbc45a3097c4f957c192d211c3a60b34f3024e4993c5bee10319166f6eb"
+  }
+}

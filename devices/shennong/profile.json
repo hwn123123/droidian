@@ -1,0 +1,26 @@
+{
+  "device": "shennong",
+  "architecture": "arm64",
+  "channel": "next",
+  "vendor_api": 34,
+  "vendor_vndk": "34",
+  "composer": "android.hardware.graphics.composer3.IComposer/default",
+  "composer_interface_version": 2,
+  "display": {"width": 1440, "height": 3200, "scale": 3},
+  "root_partition": "linux_root",
+  "root_size_bytes": 214748364800,
+  "packages": [
+    "adaptation-hybris-api34",
+    "adaptation-hybris-api34-phone",
+    "droidian-quirks-api34",
+    "android-system-gsi-34",
+    "phosh-config-hwcomposer",
+    "libhybris",
+    "libhybris-common1",
+    "libhardware2",
+    "libwlroots12a",
+    "phoc",
+    "lxc-android",
+    "linux-initramfs-halium-generic"
+  ]
+}

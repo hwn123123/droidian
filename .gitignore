@@ -1,3 +1,5 @@
 generated/
 out/
 *.zip
+__pycache__/
+.debos-*/

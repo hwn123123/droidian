@@ -1,0 +1,12 @@
+[Unit]
+Description=Shennong read-only private Android vendor images
+After=local-fs.target
+Before=android-mount.service shennong-touch.service shennong-adsp.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/shennong-mount-android vendor
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

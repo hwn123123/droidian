@@ -1,0 +1,6 @@
+adaptation-xiaomi-shennong (0.1.0) unstable; urgency=medium
+
+  * Begin API 34 / AIDL Composer 3 display bring-up.
+  * Package display scaling without forcing a software renderer.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Thu, 12 Nov 2026 08:00:00 +0800

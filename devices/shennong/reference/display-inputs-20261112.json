@@ -1,0 +1,104 @@
+{
+  "device": "shennong",
+  "channel": "next",
+  "vendor_api": 34,
+  "release_sha256": "6bb78c5256cd1ed96b99492f6c40e6bcf4441f6ee6405f2f1a397ce54cb011fe",
+  "packages": {
+    "adaptation-hybris-api34": {
+      "version": "31+git20260630130539.fcbdd0d.next.production",
+      "architecture": "arm64",
+      "filename": "pool/1d/b1/adaptation-hybris-api34_31+git20260630130539.fcbdd0d.next.production_arm64.deb",
+      "sha256": "e9867105bc1a56fc5a28c5a2e1e522ee6fec876921c47bc6a0a1afa0cda86362",
+      "size": 2976,
+      "url": "http://releases.droidian.org/snapshots/next/pool/1d/b1/adaptation-hybris-api34_31+git20260630130539.fcbdd0d.next.production_arm64.deb"
+    },
+    "adaptation-hybris-api34-phone": {
+      "version": "31+git20260630130539.fcbdd0d.next.production",
+      "architecture": "arm64",
+      "filename": "pool/d2/e3/adaptation-hybris-api34-phone_31+git20260630130539.fcbdd0d.next.production_arm64.deb",
+      "sha256": "d114911a74659b768715b73208d4fb7bff8e21168930e88b76465aa185531807",
+      "size": 2992,
+      "url": "http://releases.droidian.org/snapshots/next/pool/d2/e3/adaptation-hybris-api34-phone_31+git20260630130539.fcbdd0d.next.production_arm64.deb"
+    },
+    "android-system-gsi-34": {
+      "version": "14.0.0+r47.20260730.ubports.460+git20260630121416.6478b73.next.production",
+      "architecture": "arm64",
+      "filename": "pool/32/d1/android-system-gsi-34_14.0.0+r47.20260730.ubports.460+git20260630121416.6478b73.next.production_arm64.deb",
+      "sha256": "741a1a31ce80b3a966a6217249c674fe7df83687a1c4211176003e25d605641a",
+      "size": 124173140,
+      "url": "http://releases.droidian.org/snapshots/next/pool/32/d1/android-system-gsi-34_14.0.0+r47.20260730.ubports.460+git20260630121416.6478b73.next.production_arm64.deb"
+    },
+    "libhardware2": {
+      "version": "0.0.5.53-1+droidian1+git20260812235837.91f805b.next.lindroid.drm",
+      "architecture": "arm64",
+      "filename": "pool/38/8b/libhardware2_0.0.5.53-1+droidian1+git20260812235837.91f805b.next.lindroid.drm_arm64.deb",
+      "sha256": "bf8e55add0d776110030bc9ae8c296b152c488f0acf6e5bd7f8e4e03ca64b474",
+      "size": 11108,
+      "url": "http://releases.droidian.org/snapshots/next/pool/38/8b/libhardware2_0.0.5.53-1+droidian1+git20260812235837.91f805b.next.lindroid.drm_arm64.deb"
+    },
+    "libhybris": {
+      "version": "0.0.5.53-1+droidian1+git20260812235837.91f805b.next.lindroid.drm",
+      "architecture": "arm64",
+      "filename": "pool/6c/33/libhybris_0.0.5.53-1+droidian1+git20260812235837.91f805b.next.lindroid.drm_arm64.deb",
+      "sha256": "5801628b0d0760392bad9ace88f0a98db165c891c6bb8771737ef34094f0080b",
+      "size": 151428,
+      "url": "http://releases.droidian.org/snapshots/next/pool/6c/33/libhybris_0.0.5.53-1+droidian1+git20260812235837.91f805b.next.lindroid.drm_arm64.deb"
+    },
+    "libhybris-common1": {
+      "version": "0.0.5.53-1+droidian1+git20260812235837.91f805b.next.lindroid.drm",
+      "architecture": "arm64",
+      "filename": "pool/bd/02/libhybris-common1_0.0.5.53-1+droidian1+git20260812235837.91f805b.next.lindroid.drm_arm64.deb",
+      "sha256": "51b3375cd9478768f034ee5dc6c3d66450510b6a942c3e6ba4b8a8ccf608c726",
+      "size": 257452,
+      "url": "http://releases.droidian.org/snapshots/next/pool/bd/02/libhybris-common1_0.0.5.53-1+droidian1+git20260812235837.91f805b.next.lindroid.drm_arm64.deb"
+    },
+    "libwlroots12a": {
+      "version": "0.17.4-1~git20260507230341.e7f6be5.next.backport.0.18",
+      "architecture": "arm64",
+      "filename": "pool/e7/d6/libwlroots12a_0.17.4-1~git20260507230341.e7f6be5.next.backport.0.18_arm64.deb",
+      "sha256": "f45497768c9429b2823933172b6d86f676c1dc9e03c084d37244f6e976160c49",
+      "size": 358664,
+      "url": "http://releases.droidian.org/snapshots/next/pool/e7/d6/libwlroots12a_0.17.4-1~git20260507230341.e7f6be5.next.backport.0.18_arm64.deb"
+    },
+    "linux-initramfs-halium-generic": {
+      "version": "2025.04.11.0+git20250411210410.e515727.next.production",
+      "architecture": "arm64",
+      "filename": "pool/16/6a/linux-initramfs-halium-generic_2025.04.11.0+git20250411210410.e515727.next.production_arm64.deb",
+      "sha256": "bcabeda8d27c28c8694e3e174533af46205e9f68dda4b5ae3bba8fb78b7a8594",
+      "size": 65649348,
+      "url": "http://releases.droidian.org/snapshots/next/pool/16/6a/linux-initramfs-halium-generic_2025.04.11.0+git20250411210410.e515727.next.production_arm64.deb"
+    },
+    "phoc": {
+      "version": "0.47.0-1~git20260824230949.7e682c6.next.phosh.0.47",
+      "architecture": "arm64",
+      "filename": "pool/68/e8/phoc_0.47.0-1~git20260824230949.7e682c6.next.phosh.0.47_arm64.deb",
+      "sha256": "8128ec1f93d28751b199cbbbca718866413c332b75031ad40f4cc3aec62ca4d7",
+      "size": 186096,
+      "url": "http://releases.droidian.org/snapshots/next/pool/68/e8/phoc_0.47.0-1~git20260824230949.7e682c6.next.phosh.0.47_arm64.deb"
+    },
+    "droidian-quirks-api34": {
+      "version": "100+git20260630124647.bb620f8.next.production",
+      "architecture": "all",
+      "filename": "pool/11/b9/droidian-quirks-api34_100+git20260630124647.bb620f8.next.production_all.deb",
+      "sha256": "66c97cd263d7d4d426b5d488a65eb751650734c5c4c5931baecb780d2110c58c",
+      "size": 6484,
+      "url": "http://releases.droidian.org/snapshots/next/pool/11/b9/droidian-quirks-api34_100+git20260630124647.bb620f8.next.production_all.deb"
+    },
+    "lxc-android": {
+      "version": "1:40+git20260817002444.2c7912c.next.production",
+      "architecture": "all",
+      "filename": "pool/0a/dc/lxc-android_40+git20260817002444.2c7912c.next.production_all.deb",
+      "sha256": "7df7f02320ce103a5d4a12d66dd22fc9f34060aa0d4790f70d89023b87abb9d5",
+      "size": 9764,
+      "url": "http://releases.droidian.org/snapshots/next/pool/0a/dc/lxc-android_40+git20260817002444.2c7912c.next.production_all.deb"
+    },
+    "phosh-config-hwcomposer": {
+      "version": "18+git20241104225536.4b72a1f.next.production",
+      "architecture": "all",
+      "filename": "pool/10/61/phosh-config-hwcomposer_18+git20241104225536.4b72a1f.next.production_all.deb",
+      "sha256": "9c57c010585ee7529522183e092f85f84bdbeb705181a6231d23050ef04df1b9",
+      "size": 4696,
+      "url": "http://releases.droidian.org/snapshots/next/pool/10/61/phosh-config-hwcomposer_18+git20241104225536.4b72a1f.next.production_all.deb"
+    }
+  }
+}

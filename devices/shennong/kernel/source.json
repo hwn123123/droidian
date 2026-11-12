@@ -1,0 +1,10 @@
+{
+  "repository": "https://android.googlesource.com/kernel/common",
+  "commit": "0c3d559bcd85c64dae9c9c9687abbe5347fff3ad",
+  "archive_sha256": "04d8bea99e51c9204dc4fd9df29bcd69e900ba2ad80ad062aeb4899feb8aa985",
+  "version": "6.1.138",
+  "stock_release": "6.1.138-android14-11-g0c3d559bcd85-ab14529422",
+  "stock_clang": "17.0.2 (r487747c)",
+  "stock_config_input": "out/shennong/evidence/stock-running.config.gz",
+  "compatibility_status": "Requires configuration build and vendor-module KMI validation before deployment"
+}

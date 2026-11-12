@@ -1,0 +1,23 @@
+Source: adaptation-xiaomi-shennong
+Section: misc
+Priority: optional
+Maintainer: Ning <hwn123123@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/hwn123123/droidian/tree/droidian-14pro
+
+Package: adaptation-xiaomi-shennong
+Architecture: arm64
+Depends: ${misc:Depends},
+         adaptation-hybris-api34-phone,
+         adaptation-xiaomi-shennong-configs (= ${binary:Version})
+Description: Droidian hardware adaptation for Xiaomi 14 Pro
+ Selects the Android 14 vendor integration for shennong.
+ Boot images require separate REC deployment to the existing slot B.
+
+Package: adaptation-xiaomi-shennong-configs
+Architecture: all
+Depends: ${misc:Depends}, phosh-config-hwcomposer, bash, dnsmasq-base, iproute2, kmod
+Description: Droidian device configuration for Xiaomi 14 Pro
+ Provides the HWCOMPOSER display configuration and device identity.

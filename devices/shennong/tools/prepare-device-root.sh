@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Finish an offline Droidian root for this device, including private local inputs.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+repo=$(cd -- "$here/../../.." && pwd -P)
+[[ $EUID == 0 && $# == 2 ]] || { echo "usage: sudo $0 ROOT_DIR SSH_PUBLIC_KEY" >&2; exit 2; }
+root=$(realpath "$1")
+key=$(realpath "$2")
+[[ $root != / && -s $key && -f $root/etc/droidian/shennong-build ]]
+grep -qx 'device=shennong' "$root/etc/droidian/shennong-build"
+build="$repo/out/shennong/kernel-display-build"
+private="$repo/out/shennong/private-vendor"
+stock_modules="$repo/out/shennong/stock-modules"
+release=6.1.138-android14-11-g0c3d559bcd85-ab14529422
+python3 - "$build" "$private" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+build,private=map(Path,sys.argv[1:])
+assert json.loads((build/'module-abi.json').read_text())['kernel_abi_matches']
+for info in json.loads((private/'manifest.json').read_text())['images'].values():
+    p=private/info['filename'];sha=hashlib.sha256()
+    assert p.stat().st_size==info['size']
+    with p.open('rb') as f:
+        for block in iter(lambda:f.read(4*1024**2),b''):sha.update(block)
+    assert sha.hexdigest()==info['sha256']
+PY
+mkdir -p "$root/opt/shennong/vendor" "$root/lib/modules/$release/extra/vendor_dlkm" \
+    "$root/lib/modules/$release/extra/early"
+cp --reflink=auto "$private/"*.img "$private/manifest.json" "$root/opt/shennong/vendor/"
+make -C "$repo/out/shennong/kernel-source" O="$build" ARCH=arm64 \
+    LLVM=/usr/lib/llvm-17/bin/ LOCALVERSION= INSTALL_MOD_PATH="$root" modules_install
+cp "$stock_modules/vendor_dlkm/lib/modules/"*.ko "$root/lib/modules/$release/extra/vendor_dlkm/"
+cp "$stock_modules/early/lib/modules/"*.ko "$root/lib/modules/$release/extra/early/"
+depmod -b "$root" "$release"
+
+# Build the latest config package, so changes made while rootfs downloads
+# were in progress are included reproducibly in the final device image.
+work=$(mktemp -d "$repo/out/shennong/device-config.XXXXXX")
+cp -a "$here/../packages/adaptation-xiaomi-shennong" "$work/source"
+(cd "$work/source" && dpkg-buildpackage --no-sign -b)
+mkdir -p "$root/var/cache/shennong-adaptation"
+cp "$work/"*.deb "$root/var/cache/shennong-adaptation/"
+chroot "$root" /bin/sh -c 'dpkg --force-confnew -i /var/cache/shennong-adaptation/*.deb'
+rm -r "$root/var/cache/shennong-adaptation"
+
+uid=$(awk -F: '$1=="droidian"{print $3}' "$root/etc/passwd")
+gid=$(awk -F: '$1=="droidian"{print $4}' "$root/etc/passwd")
+[[ $uid == 1000 && -n $gid ]]
+install -d -m700 -o "$uid" -g "$gid" "$root/home/droidian/.ssh"
+install -m600 -o "$uid" -g "$gid" "$key" "$root/home/droidian/.ssh/authorized_keys"
+for path in "$root/etc/ssh/ssh_host_"*; do [ ! -f "$path" ] || rm "$path"; done
+systemctl --root="$root" enable shennong-vendor.service shennong-touch.service \
+    shennong-adsp.service shennong-usb-network.service shennong-ssh-hostkeys.service ssh.service
+systemctl --root="$root" mask hybris-usb.service mobian-usb-gadget.service umtp-responder.service
+# usb0 is a management connection with no advertised Internet gateway.
+mkdir -p "$root/etc/NetworkManager/conf.d"
+printf '[keyfile]\nunmanaged-devices=interface-name:usb0\n' > \
+    "$root/etc/NetworkManager/conf.d/99-shennong-usb0-unmanaged.conf"
+printf '/dev/disk/by-partlabel/linux_root / ext4 defaults,noatime 0 1\n' > "$root/etc/fstab"
+chroot "$root" dpkg --audit
+echo 'Offline device root prepared; boot and display validation are still required.'

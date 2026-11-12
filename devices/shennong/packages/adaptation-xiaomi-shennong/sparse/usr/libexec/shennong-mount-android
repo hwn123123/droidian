@@ -1,0 +1,81 @@
+#!/bin/bash
+# Device mount layout for a dedicated Linux root; never mounts Android userdata.
+set -euo pipefail
+private=/opt/shennong/vendor
+container=/var/lib/lxc/android/rootfs
+
+bind_tree() {
+    local source=$1 target=$2
+    mkdir -p "$target"
+    mountpoint -q "$target" || mount --rbind "$source" "$target"
+}
+
+mount_private_vendor() {
+    for name in vendor odm vendor_dlkm system_dlkm; do
+        local raw="/run/shennong-images/$name"
+        mkdir -p "$raw" "/$name"
+        [ -s "$private/$name.img" ]
+        mountpoint -q "$raw" || mount -o loop,ro,nosuid,nodev "$private/$name.img" "$raw"
+        if ! mountpoint -q "/$name"; then
+            if [ "$name" = vendor ]; then
+                mount -t overlay overlay -o "lowerdir=/usr/lib/droid-vendor-overlay:$raw" /vendor
+            else
+                mount --bind "$raw" "/$name"
+            fi
+        fi
+    done
+    [ "$(sed -n 's/^ro.vndk.version=//p' /vendor/build.prop)" = 34 ]
+    for name in firmware_mnt firmware modem_firmware dsp bt_firmware; do
+        local source="/run/shennong-firmware/vendor/$name"
+        [ -d "$source" ] || continue
+        bind_tree "$source" "/vendor/$name"
+    done
+    [ ! -w /sys/module/firmware_class/parameters/path ] || \
+        printf '%s' '/vendor/firmware_mnt/image,/vendor/firmware_mnt/image/kiwi,/vendor/firmware' \
+            > /sys/module/firmware_class/parameters/path
+    # Persist contains calibration. The display experiment needs read access.
+    for path in /dev/disk/by-partlabel/persist /dev/block/by-name/persist; do
+        if [ -b "$path" ]; then
+            mkdir -p /mnt/vendor/persist
+            mountpoint -q /mnt/vendor/persist || mount -t ext4 -o ro,nosuid,nodev "$path" /mnt/vendor/persist
+            break
+        fi
+    done
+}
+
+mount_android() {
+    mkdir -p "$container" /android /var/lib/shennong/android-data /dev/socket /dev/__properties__ /dev/cpuset
+    if ! mountpoint -q /dev/cpuset; then
+        if ! mount -t cpuset -o nodev,noexec,nosuid none /dev/cpuset; then
+            # Match upstream mount-android: a cgroup-v2 host may already own
+            # cpuset. Android's task-profile setup handles that hierarchy.
+            echo 'Legacy cpuset mount unavailable; checking the host hierarchy' >&2
+            [ -f /sys/fs/cgroup/cgroup.controllers ]
+        fi
+    fi
+    mountpoint -q "$container" || mount -o loop /var/lib/lxc/android/android-rootfs.img "$container"
+    if [ -d /usr/lib/droid-system-overlay ] && ! mountpoint -q "$container/system"; then
+        mount -t overlay overlay -o "lowerdir=/usr/lib/droid-system-overlay:$container/system" "$container/system"
+    fi
+    for name in vendor odm vendor_dlkm system_dlkm; do bind_tree "/$name" "$container/$name"; done
+    bind_tree /var/lib/shennong/android-data "$container/data"
+    bind_tree "$container" /android
+    [ -L /data ] || { [ ! -e /data ]; ln -s /android/data /data; }
+    mkdir -p /apex
+    mountpoint -q /apex || mount -t tmpfs tmpfs /apex
+    /usr/sbin/droidian-apex mount --all
+    # Keep property context inside the independent Linux root filesystem.
+    mkdir -p /android/data/property
+    chmod 700 /android/data/property
+    for entry in 'persist.halium.version.device shennong' 'persist.halium.default_language zh_CN.UTF-8'; do
+        read -r key value <<< "$entry"
+        [ -f "/android/data/property/$key" ] || printf '%s' "$value" > "/android/data/property/$key"
+        chmod 600 "/android/data/property/$key"
+    done
+}
+
+case ${1:-} in
+    vendor) mount_private_vendor ;;
+    android) mount_android ;;
+    *) echo "usage: $0 vendor|android" >&2; exit 2 ;;
+esac

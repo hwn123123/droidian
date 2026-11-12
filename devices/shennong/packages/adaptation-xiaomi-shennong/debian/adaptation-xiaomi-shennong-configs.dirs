@@ -1,0 +1,6 @@
+usr/lib/droid-vendor-overlay/firmware_mnt
+usr/lib/droid-vendor-overlay/firmware
+usr/lib/droid-vendor-overlay/modem_firmware
+usr/lib/droid-vendor-overlay/dsp
+usr/lib/droid-vendor-overlay/bt_firmware
+usr/lib/droid-vendor-overlay/lib64

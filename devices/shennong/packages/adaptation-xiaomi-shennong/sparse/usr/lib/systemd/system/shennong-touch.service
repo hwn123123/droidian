@@ -1,0 +1,14 @@
+[Unit]
+Description=Stock Synaptics touch compatibility
+After=shennong-vendor.service shennong-usb-network.service
+Before=display-manager.service
+Before=shennong-adsp.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/shennong-touch
+RemainAfterExit=yes
+TimeoutStartSec=45
+
+[Install]
+WantedBy=multi-user.target
