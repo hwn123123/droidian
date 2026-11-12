@@ -147,7 +147,9 @@ files. The REC installer verifies the dedicated root and B boot readback,
 then compares the preservation manifest again. It leaves the device in REC;
 switching to B is a separate action after installation succeeds.
 
-Status: the adaptation packages and the display kernel built successfully.
+## Bring-up status
+
+The adaptation packages and the display kernel built successfully.
 The display kernel's 53,581 imported kernel-symbol checks across 1,118
 captured modules (including both early vendor ramdisks) passed with zero CRC
 or vermagic-feature mismatches. The broader Halium profile failed and is
@@ -155,6 +157,26 @@ excluded from deployment. The rootfs and B boot images are built, and the
 offline service dependency check passed. The account preparation follows
 Droidian's current desktop UID mapping. REC validates Linux executable mode
 bits and ELF headers without requesting permission to execute those binaries
-under REC's Android SELinux policy. Physical boot/display validation is in
-progress. This is a development port, not a verified solution to the visible
-tearing problem.
+under REC's Android SELinux policy.
+
+The dedicated Linux root and B boot images were installed through REC. All
+preserved partition hashes and both GPT-sector captures matched afterwards.
+Droidian booted with working USB NCM/SSH, Synaptics input, the stock ADSP
+battery channel and the Adreno GPU device. This does not yet establish that
+the camera, cellular, Wi-Fi or accelerated desktop work.
+
+The first container attempt exposed an important root-handoff issue: a host
+chroot alone left the mount namespace rooted in initramfs. Android APEX's
+`setns()` then changed `/` back to that old root and lost `/bootstrap-apex`.
+The B initramfs now moves the Linux root onto `/` before entering it. The
+next real boot passed that failure and started Android services.
+
+APEX then rejected duplicate versioned mounts. The container configuration
+now inherits the dedicated root's APEX tree once, omitting the generic second
+`/apex` bind. After starting this configuration the USB management link became
+unresponsive; its cause and the stability of the container remain under
+investigation. Read the persistent boot/kernel records from REC before
+claiming this change has fixed APEX startup.
+
+Physical boot/display validation is in progress. This is a development port,
+not a verified solution to the visible tearing problem.
