@@ -731,11 +731,13 @@ static int switch_to_root(const char *root, const char *mode) {
         return -1;
     }
 
-    make_directory("/oldroot", 0755);
-    if (mount(root, root, NULL, MS_BIND | MS_REC, NULL) != 0) {
+    bool persistent_root = strcmp(mode, "droidian") == 0;
+    if (!persistent_root && mount(root, root, NULL, MS_BIND | MS_REC, NULL) != 0) {
         log_message("bind %s failed: %s", root, strerror(errno));
         return -1;
     }
+    /* Release DRM while all early paths are still available. */
+    stop_early_splash();
     const char *early_mounts[] = {"dev", "proc", "sys", "run"};
     for (size_t i = 0; i < sizeof(early_mounts) / sizeof(early_mounts[0]); ++i) {
         char source[32];
@@ -743,18 +745,29 @@ static int switch_to_root(const char *root, const char *mode) {
         snprintf(source, sizeof(source), "/%s", early_mounts[i]);
         snprintf(target, sizeof(target), "%s/%s", root, early_mounts[i]);
         make_directory(target, 0755);
-        if (mount(source, target, NULL, MS_BIND | MS_REC, NULL) != 0) {
-            log_message("bind %s into %s failed: %s", source, mode, strerror(errno));
+        unsigned long flags = persistent_root ? MS_MOVE : (MS_BIND | MS_REC);
+        if (mount(source, target, NULL, flags, NULL) != 0) {
+            log_message("carry %s into %s failed: %s", source, mode, strerror(errno));
             return -1;
         }
     }
-    if (chdir(root) != 0 || chroot(".") != 0 || chdir("/") != 0) {
+    if (chdir(root) != 0) {
+        log_message("chdir %s failed: %s", root, strerror(errno));
+        return -1;
+    }
+    /* A chroot alone leaves the mount namespace rooted in initramfs.
+     * Android's APEX setup uses setns(), which then resets / to that old
+     * root and loses /apex. Move the mounted Linux root onto / before
+     * entering it, following switch_root semantics. */
+    if (persistent_root && mount(".", "/", NULL, MS_MOVE, NULL) != 0) {
+        log_message("move Linux root onto / failed: %s", strerror(errno));
+        return -1;
+    }
+    if (chroot(".") != 0 || chdir("/") != 0) {
         log_message("chroot %s failed: %s", root, strerror(errno));
         return -1;
     }
     setenv("XM14_BOOT_MODE", mode, 1);
-    /* Release DRM before Droidian starts its display server. */
-    stop_early_splash();
     execl("/sbin/init", "init", NULL);
     log_message("exec %s init failed: %s", mode, strerror(errno));
     return -1;

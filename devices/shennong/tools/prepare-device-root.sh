@@ -65,7 +65,8 @@ systemctl --root="$root" enable shennong-vendor.service shennong-touch.service \
     shennong-adsp.service shennong-graphics.service shennong-usb-network.service \
     shennong-ssh-hostkeys.service ssh.service
 chroot "$root" usermod -a -G video,render droidian
-systemctl --root="$root" mask hybris-usb.service mobian-usb-gadget.service umtp-responder.service
+systemctl --root="$root" mask hybris-usb.service mobian-usb-gadget.service \
+    umtp-responder.service usb-tethering.service lxc-net.service lxc.service
 # The generic package enables Android mounting under local-fs.target even
 # though it runs after that target. Our vendor-image mounts also require the
 # root filesystem. Pull this stage from LXC instead, without an ordering cycle.
