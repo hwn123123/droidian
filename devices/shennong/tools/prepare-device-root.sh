@@ -8,6 +8,7 @@ root=$(realpath "$1")
 key=$(realpath "$2")
 [[ $root != / && -s $key && -f $root/etc/droidian/shennong-build ]]
 grep -qx 'device=shennong' "$root/etc/droidian/shennong-build"
+rm -f "$root/etc/apt/apt.conf.d/99-shennong-build-proxy"
 build="$repo/out/shennong/kernel-display-build"
 private="$repo/out/shennong/private-vendor"
 stock_modules="$repo/out/shennong/stock-modules"
@@ -50,8 +51,14 @@ install -d -m700 -o "$uid" -g "$gid" "$root/home/droidian/.ssh"
 install -m600 -o "$uid" -g "$gid" "$key" "$root/home/droidian/.ssh/authorized_keys"
 for path in "$root/etc/ssh/ssh_host_"*; do [ ! -f "$path" ] || rm "$path"; done
 systemctl --root="$root" enable shennong-vendor.service shennong-touch.service \
-    shennong-adsp.service shennong-usb-network.service shennong-ssh-hostkeys.service ssh.service
+    shennong-adsp.service shennong-graphics.service shennong-usb-network.service \
+    shennong-ssh-hostkeys.service ssh.service
+chroot "$root" usermod -a -G video,render droidian
 systemctl --root="$root" mask hybris-usb.service mobian-usb-gadget.service umtp-responder.service
+# The generic package enables Android mounting under local-fs.target even
+# though it runs after that target. Our vendor-image mounts also require the
+# root filesystem. Pull this stage from LXC instead, without an ordering cycle.
+rm -f "$root/etc/systemd/system/local-fs.target.requires/android-mount.service"
 # usb0 is a management connection with no advertised Internet gateway.
 mkdir -p "$root/etc/NetworkManager/conf.d"
 printf '[keyfile]\nunmanaged-devices=interface-name:usb0\n' > \

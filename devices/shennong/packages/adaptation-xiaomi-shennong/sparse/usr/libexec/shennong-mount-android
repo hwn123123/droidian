@@ -13,6 +13,12 @@ bind_tree() {
 mount_private_vendor() {
     for name in vendor odm vendor_dlkm system_dlkm; do
         local raw="/run/shennong-images/$name"
+        # Generic roots point these names into /android. This dedicated-root
+        # layout mounts vendor first, before the Android root is available.
+        if [ -L "/$name" ]; then
+            [ "$(readlink "/$name")" = "/android/$name" ]
+            rm "/$name"
+        fi
         mkdir -p "$raw" "/$name"
         [ -s "$private/$name.img" ]
         mountpoint -q "$raw" || mount -o loop,ro,nosuid,nodev "$private/$name.img" "$raw"

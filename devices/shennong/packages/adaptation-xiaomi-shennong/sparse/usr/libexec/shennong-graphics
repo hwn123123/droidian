@@ -1,0 +1,12 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+set -eu
+modprobe msm_kgsl
+attempt=0
+while [ ! -c /dev/kgsl-3d0 ]; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 30 ] || { echo 'Adreno GPU did not expose kgsl-3d0' >&2; exit 1; }
+    sleep 1
+done
+udevadm settle --timeout=5
+echo 'Stock Adreno GPU device is ready for libhybris'

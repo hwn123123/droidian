@@ -1,0 +1,4 @@
+# Host libhybris clients need the same GPU and Binder devices as Android HALs.
+KERNEL=="kgsl-3d0", GROUP="video", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660", TAG+="uaccess"
+KERNEL=="binder|hwbinder|vndbinder", MODE="0666"

@@ -15,4 +15,5 @@ printf '%s\n' 'device=shennong' 'vendor_api=34' 'display_backend=hwcomposer' \
 # Keep rootfs creation separate from all kernel flashing and partition actions.
 # The packages contain configuration only; no boot-image postinst is installed.
 rm -r /var/cache/shennong-adaptation
+rm -f /etc/apt/apt.conf.d/99-shennong-build-proxy
 apt-get clean

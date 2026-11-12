@@ -1,0 +1,14 @@
+[Unit]
+Description=Stock Adreno GPU for the Android graphics compatibility layer
+Requires=shennong-vendor.service
+After=shennong-vendor.service shennong-touch.service shennong-adsp.service
+Before=android-mount.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/shennong-graphics
+RemainAfterExit=yes
+TimeoutStartSec=45
+
+[Install]
+WantedBy=multi-user.target
