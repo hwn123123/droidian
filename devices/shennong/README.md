@@ -151,6 +151,10 @@ Status: the adaptation packages and the display kernel built successfully.
 The display kernel's 53,581 imported kernel-symbol checks across 1,118
 captured modules (including both early vendor ramdisks) passed with zero CRC
 or vermagic-feature mismatches. The broader Halium profile failed and is
-excluded from deployment. Rootfs generation and physical boot/display
-validation are in progress. This is a development port, not a verified
-solution to the visible tearing problem.
+excluded from deployment. The rootfs and B boot images are built, and the
+offline service dependency check passed. The account preparation follows
+Droidian's current desktop UID mapping. REC validates Linux executable mode
+bits and ELF headers without requesting permission to execute those binaries
+under REC's Android SELinux policy. Physical boot/display validation is in
+progress. This is a development port, not a verified solution to the visible
+tearing problem.

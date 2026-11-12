@@ -33,7 +33,7 @@ for part in qupfw_a qupfw_b; do
 done
 cmp /dev/block/by-name/qupfw_a /dev/block/by-name/qupfw_b
 root_device=$(readlink -f /dev/block/by-name/linux_root)
-if awk -v resolved="$root_device" '$1==resolved || $1=="/dev/block/by-name/linux_root" {found=1} END{exit !found}' /proc/mounts; then
+if grep -qE "^($root_device|/dev/block/by-name/linux_root) " /proc/mounts; then
     echo 'linux_root is mounted; refusing installation' >&2
     exit 1
 fi
@@ -44,8 +44,15 @@ mount -t ext4 /dev/block/by-name/linux_root /mnt/droidian-check
 trap 'umount /mnt/droidian-check 2>/dev/null || true' EXIT
 grep -qx 'device=shennong' /mnt/droidian-check/etc/droidian/shennong-build
 grep -qx 'display_backend=hwcomposer' /mnt/droidian-check/etc/droidian/shennong-build
-[ -x /mnt/droidian-check/usr/lib/systemd/systemd ]
-[ -x /mnt/droidian-check/usr/sbin/sshd ]
+# REC's SELinux policy intentionally disallows executing arbitrary Linux
+# binaries. access(X_OK) therefore fails even for a valid mode-0755 file.
+# Verify the file, its POSIX execute bits and ELF magic without executing it.
+for program in /mnt/droidian-check/usr/lib/systemd/systemd /mnt/droidian-check/usr/sbin/sshd; do
+    [ -f "$program" ]
+    mode=$(stat -c %a "$program")
+    [ "$((0$mode & 0111))" -ne 0 ]
+    [ "$(od -An -tx1 -N4 "$program" | tr -d ' \n')" = 7f454c46 ]
+done
 [ -s /mnt/droidian-check/home/droidian/.ssh/authorized_keys ]
 [ -s /mnt/droidian-check/opt/shennong/vendor/vendor.img ]
 umount /mnt/droidian-check
