@@ -55,13 +55,19 @@ def main():
     if not required.issubset(checks):
         raise ValueError("Incomplete installation manifest")
     total = sum((payload / name).stat().st_size for name in checks)
-    available = int(shell("df -k /tmp | tail -n 1").split()[3]) * 1024
-    if total + 512 * 1024**2 > available:
-        raise RuntimeError("Not enough REC RAM for this payload")
     memory = dict(line.split(":", 1) for line in shell("cat /proc/meminfo").splitlines())
     memory_available = int(memory["MemAvailable"].split()[0]) * 1024
     if total + 1024**3 > memory_available:
         raise RuntimeError("REC needs at least 1 GiB free after staging this payload")
+    available = int(shell("df -k /tmp | tail -n 1").split()[3]) * 1024
+    if total + 512 * 1024**2 > available:
+        # REC defaults /tmp to half the RAM. Raise only this temporary staging
+        # limit, after checking actual free memory; no persistent setting changes.
+        staging_mib = (total + 512 * 1024**2 + 1024**2 - 1) // 1024**2
+        root(f"mount -o remount,size={staging_mib}M /tmp")
+        available = int(shell("df -k /tmp | tail -n 1").split()[3]) * 1024
+        if total + 512 * 1024**2 > available:
+            raise RuntimeError("Not enough REC tmpfs space for this payload")
     root("mkdir -p " + STAGE)
     subprocess.run(adb + ["forward", "tcp:" + str(PORT), "tcp:" + str(PORT)], check=True)
 
