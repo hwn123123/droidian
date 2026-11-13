@@ -1,3 +1,41 @@
+adaptation-xiaomi-shennong (0.1.16) unstable; urgency=medium
+
+  * Order Phosh after the native audio hardware handoff so its PulseAudio
+    session cannot race sound-card enumeration and permission setup.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 08:50:00 +0800
+
+adaptation-xiaomi-shennong (0.1.15) unstable; urgency=medium
+
+  * Select the stock microphone's native 24-bit PCM through the distribution's
+    existing Droid card configuration hook; keep the vendor policy unchanged.
+  * Use the primary PCM output for media instead of the incompatible deep sink.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 08:40:00 +0800
+
+adaptation-xiaomi-shennong (0.1.14) unstable; urgency=medium
+
+  * Apply the stock system:audio policy to audio memory and DSP sleep nodes.
+  * Allow the native desktop Audio HAL to initialize PAL and AGM as its user.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 05:20:00 +0800
+
+adaptation-xiaomi-shennong (0.1.13) unstable; urgency=medium
+
+  * Initialize the original audio packet driver before starting the DSP.
+  * Preserve its native GPR readiness and message routing across cold boots.
+  * Populate SPF children before loading the downstream ASoC graph.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 02:20:00 +0800
+
+adaptation-xiaomi-shennong (0.1.12) unstable; urgency=medium
+
+  * Complete stock SPF child registration after the native Android PDR handoff.
+  * Load the real ASoC dependency graph without the unstable FastRPC insertion.
+  * Restore the stock audio packet node policy through native udev rules.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 02:00:00 +0800
+
 adaptation-xiaomi-shennong (0.1.11) unstable; urgency=medium
 
   * Select the stock driver's documented native-host WLAN data path.

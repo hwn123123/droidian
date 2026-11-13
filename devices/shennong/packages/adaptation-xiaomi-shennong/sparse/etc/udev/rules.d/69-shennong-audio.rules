@@ -1,0 +1,2 @@
+# Match the stock Android audio node policy, using Droidian's Android AID group.
+KERNEL=="aud_pasthru_adsp|msm_audio_ion|msm_audio_ion_cma|msm_adsp_sleepmon", OWNER="system", GROUP="android_audio", MODE="0660"

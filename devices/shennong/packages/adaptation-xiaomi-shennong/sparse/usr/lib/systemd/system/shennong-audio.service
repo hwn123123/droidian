@@ -1,0 +1,18 @@
+[Unit]
+Description=Shennong stock audio hardware handoff
+Requires=shennong-vendor.service shennong-adsp.service
+Wants=lxc@android.service
+After=shennong-vendor.service shennong-adsp.service lxc@android.service
+Before=phosh.service
+ConditionPathExists=/lib/modules/6.1.138-android14-11-g0c3d559bcd85-ab14529422/extra/shennong/shennong_audio_compat.ko
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/modprobe shennong_audio_compat
+ExecStart=/usr/sbin/modprobe -a audio_pkt_dlkm q6_dlkm pinctrl_lpi_dlkm stub_dlkm cs35l43_dlkm lpass_cdc_wsa2_macro_dlkm lpass_cdc_wsa_macro_dlkm lpass_cdc_va_macro_dlkm lpass_cdc_rx_macro_dlkm wcd939x_slave_dlkm swr_dmic_dlkm swr_haptics_dlkm hdmi_dlkm btpower bt_fm_slim machine_dlkm
+ExecStartPost=/usr/bin/systemd-tmpfiles --create /usr/lib/tmpfiles.d/shennong-audio.conf
+RemainAfterExit=yes
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

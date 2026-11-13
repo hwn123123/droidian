@@ -1,0 +1,4 @@
+# The stock primary microphone exposes PCM_8_24_BIT, not PCM_16_BIT.
+# Use the distribution's device hook; leave vendor audio policy untouched.
+# Media uses the primary PCM output instead of an incompatible 24-bit sink.
+load-module module-droid-card rate=48000 source_format=s24-32le source_channel_map=mono output_deep_buffer=false voice_virtual_stream=true

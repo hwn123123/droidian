@@ -188,6 +188,53 @@ another network, source-bound HTTPS requests to both `www.baidu.com` and
 `www.debian.org` returned HTTP 200 over the Wi-Fi address. Internet access
 is verified on that network.
 
+### Native audio hardware handoff
+
+Build the device's GPL compatibility module with
+`devices/shennong/tools/build-audio-compat.sh`. It uses the running display
+kernel build and verifies the captured SPF module's SHA256 and exported
+symbol version. Image preparation installs it automatically. The private
+vendor input and original audio modules remain unchanged.
+
+The stock SPF driver attempts child enumeration for ten seconds, while the
+Android PDR notification arrives just after that deadline on this layout.
+`shennong-audio.service` completes the same OF population operation once,
+after the stock SPF API confirms DSP readiness. It then loads the real ASoC
+codec graph, including WCD939x, CS35L43, SoundWire, HDMI and Bluetooth links.
+The audio-packet module must initialize before ADSP starts: loading it after
+the GPR endpoint exists overwrites its synchronously probed state with INIT.
+The existing ADSP hardware helper now provides that original ordering.
+Phosh is ordered after this hardware handoff so its native user audio service
+cannot race card enumeration or permission setup.
+
+The distribution's PulseAudio remains the audio owner. Native udev rules
+apply the stock `0660 system:audio` policy to the packet, audio-memory and
+DSP sleep-monitor nodes, mapping the group to Droidian's `android_audio`.
+The stock sound-card status kobject uses the corresponding tmpfiles policy.
+No permanent test process, custom playback server, driver rebinding loop,
+FastRPC insertion or alternate mixer policy is installed. The distribution's
+`arm_droid_card_custom.pa` hook selects the stock microphone's native
+`s24-32le` mono format. Primary PCM handles playback; the optional
+deep-buffer sink is disabled because its 24-bit-only format does not match
+the module's normal 16-bit output. The original vendor XML remains unchanged.
+
+On 2026-11-14 the real `pineapple-mtp-snd-card` registered automatically
+after reboot, exposing 53 PCM links with working USB/SSH and Phosh. After
+restoring audio-memory permissions, the native user's QTI primary Audio HAL
+opened successfully and registered PAL/AGM. PulseAudio playback returned
+success and the owner confirmed hearing all three test tones. A 3.92-second
+capture from the real primary microphone contained a strong 440 Hz tone
+only during speaker playback, alongside ordinary background input. The
+temporary recording was deleted after local analysis. Bluetooth, wired
+accessories and call audio remain unverified.
+
+Adaptation 0.1.16 also passed a new boot: audio handoff completed before
+Phosh, the default sink/source were the real primary devices, and playback
+plus a 2.88-second microphone capture worked without selecting a device or
+reapplying any configuration. This second temporary recording was deleted.
+
+### Kernel build
+
 Build the pinned 6.1.138 source with the captured stock config:
 
 ```sh
@@ -464,5 +511,7 @@ It checks that incomplete objects stay out of snapshots and exactly one
 complete announcement is emitted, including asynchronous properties.
 
 This remains a development port. These cellular checks cover the inserted SIM
-and IPv4 data. Dual-SIM data switching, IPv6, calls/IMS, messaging, Wi-Fi, audio,
-cameras, charging and suspend still need their own hardware validation.
+and IPv4 data. Wi-Fi Internet access and basic speaker/microphone operation
+also passed the separate checks described above. Dual-SIM data switching,
+IPv6, calls/IMS, messaging, Bluetooth audio, cameras, charging and suspend
+still need their own hardware validation.

@@ -4,8 +4,11 @@
 set -eu
 exec >>/var/log/shennong-adsp.log 2>&1
 /usr/libexec/shennong-qup-check
+# The packet driver initializes its state after registering with GPR. It
+# must finish that initialization before ADSP creates the GPR endpoint;
+# otherwise a synchronous probe's READY state is overwritten with INIT.
 for module in q6_pdr_dlkm q6_notifier_dlkm snd_event_dlkm gpr_dlkm \
-    spf_core_dlkm adsp_loader_dlkm; do
+    spf_core_dlkm audpkt_ion_dlkm audio_pkt_dlkm adsp_loader_dlkm; do
     [ ! -d "/sys/module/$module" ] || continue
     insmod "/lib/modules/$(uname -r)/extra/vendor_dlkm/$module.ko"
 done

@@ -72,6 +72,7 @@ cp "$work/"*.deb "$root/var/cache/shennong-adaptation/"
 chroot "$root" /bin/sh -c 'dpkg --force-confnew -i /var/cache/shennong-adaptation/*.deb'
 rm -r "$root/var/cache/shennong-adaptation"
 bash "$here/install-wifi-config.sh" "$root"
+bash "$here/install-audio-compat.sh" "$root"
 bash "$here/install-binder-compat.sh" "$root"
 bash "$here/install-usb-framework.sh" "$root"
 bash "$here/install-cellular-runtime.sh" "$root"
@@ -112,7 +113,7 @@ for path in "$root/etc/ssh/ssh_host_"*; do [ ! -f "$path" ] || rm "$path"; done
 rm -f "$root/etc/systemd/system/sysinit.target.wants/shennong-usb-network.service"
 systemctl --root="$root" enable shennong-vendor.service shennong-touch.service \
     shennong-adsp.service shennong-graphics.service shennong-usb-network.service \
-    shennong-ssh-hostkeys.service shennong-wifi.service ssh.service phosh.service lxc@android.service
+    shennong-ssh-hostkeys.service shennong-wifi.service shennong-audio.service ssh.service phosh.service lxc@android.service
 systemctl --root="$root" set-default graphical.target
 chroot "$root" usermod -a -G video,render droidian
 systemctl --root="$root" mask hybris-usb.service mobian-usb-gadget.service \
