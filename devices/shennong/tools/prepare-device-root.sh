@@ -54,7 +54,7 @@ radio_packages=("$repo/out/shennong/telephony-packages/"ofono-binder-plugin_*+sh
 install -m644 "${radio_packages[0]}" "$root/tmp/shennong-ofono.deb"
 chroot "$root" dpkg -i /tmp/shennong-ofono.deb
 rm "$root/tmp/shennong-ofono.deb"
-bridge_packages=("$repo/out/shennong/telephony-packages/"ofono2mm_*+shennong2_all.deb)
+bridge_packages=("$repo/out/shennong/telephony-packages/"ofono2mm_*+shennong7_all.deb)
 [ "${#bridge_packages[@]}" = 1 ] && [ -s "${bridge_packages[0]}" ] || {
     echo 'Build the device modem bridge with tools/build-ofono2mm.sh first.' >&2
     exit 1
@@ -94,7 +94,8 @@ systemctl --root="$root" mask hybris-usb.service mobian-usb-gadget.service \
 rm -f "$root/etc/systemd/system/local-fs.target.requires/android-mount.service"
 # NetworkManager owns USB addressing, DHCP, DNS and shared-mode NAT.
 rm -f "$root/etc/NetworkManager/conf.d/99-shennong-usb0-unmanaged.conf"
-chmod 600 "$root/etc/NetworkManager/system-connections/shennong-usb-sharing.nmconnection"
+chmod 600 "$root/etc/NetworkManager/system-connections/shennong-usb-sharing.nmconnection" \
+    "$root/etc/NetworkManager/system-connections/shennong-mobile-auto.nmconnection"
 printf '/dev/disk/by-partlabel/linux_root / ext4 defaults,noatime 0 1\n' > "$root/etc/fstab"
 mkdir -p "$root/var/lib/systemd/timesync"
 # Let systemd use the build time as its normal offline clock floor.

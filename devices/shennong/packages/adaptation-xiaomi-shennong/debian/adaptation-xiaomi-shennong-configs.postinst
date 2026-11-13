@@ -10,5 +10,6 @@ if [ "$1" = configure ]; then
     rm -f /etc/systemd/user/mtp-server.service.d/50-shennong.conf
     rm -f /usr/lib/droidian/device/mtp-supported /usr/libexec/shennong-mtp
     chmod 600 /etc/NetworkManager/system-connections/shennong-usb-sharing.nmconnection
+    chmod 600 /etc/NetworkManager/system-connections/shennong-mobile-auto.nmconnection
 fi
 #DEBHELPER#

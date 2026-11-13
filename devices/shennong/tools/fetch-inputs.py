@@ -21,9 +21,13 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def download(url, path, expected=None):
+def download(url, path, expected=None, *, offline=False):
     if path.is_file() and expected and digest(path.read_bytes()) == expected:
         return path.read_bytes()
+    if offline:
+        if path.is_file() and expected is None:
+            return path.read_bytes()
+        raise ValueError(f"Missing or invalid cached input: {path}")
     with urllib.request.urlopen(url, timeout=90) as response:
         data = response.read()
     if expected and digest(data) != expected:
@@ -47,13 +51,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--download", action="store_true")
+    parser.add_argument("--offline", action="store_true",
+                        help="Verify and use signed cached inputs without network access")
     args = parser.parse_args()
     profile = json.loads((DEVICE / "profile.json").read_text())
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     base = f"{MIRROR}/{profile['channel']}/"
-    release = download(base + "dists/rolling/Release", output / "Release")
-    download(base + "dists/rolling/Release.gpg", output / "Release.gpg")
+    release = download(base + "dists/rolling/Release", output / "Release", offline=args.offline)
+    download(base + "dists/rolling/Release.gpg", output / "Release.gpg", offline=args.offline)
     with tempfile.TemporaryDirectory(prefix="droidian-keyring-") as home:
         subprocess.run([
             "gpgv", "--homedir", home, "--keyring", str(KEYRING),
@@ -72,7 +78,7 @@ def main():
         relative = f"main/binary-{arch}/Packages.gz"
         expected_sha, expected_size = hashes[relative]
         data = download(base + "dists/rolling/" + relative,
-                        output / f"Packages-{arch}.gz", expected_sha)
+                        output / f"Packages-{arch}.gz", expected_sha, offline=args.offline)
         if len(data) != expected_size:
             raise ValueError(f"Index size mismatch: {relative}")
         for paragraph in gzip.decompress(data).decode().split("\n\n"):
@@ -105,7 +111,7 @@ def main():
         def fetch(item):
             name, package = item
             path = package_dir / PurePosixPath(package["filename"]).name
-            data = download(package["url"], path, package["sha256"])
+            data = download(package["url"], path, package["sha256"], offline=args.offline)
             if len(data) != package["size"]:
                 raise ValueError(f"Package size mismatch: {name}")
             print(f"Verified {name} {package['version']}", flush=True)

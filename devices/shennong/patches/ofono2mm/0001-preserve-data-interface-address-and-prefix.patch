@@ -1,11 +1,13 @@
 From: Ning <hwn123123@users.noreply.github.com>
-Subject: [PATCH] preserve data-interface addressing in the ModemManager API
+Subject: [PATCH] adapt data addressing and asynchronous radio state
 
-Import the real IPv4 address and mask for both active and newly reported
-bearers. Report RMNET interfaces as NET ports and fix the 3GPP DRX key.
-A SIM may be present before its PIN property has arrived; defer that state.
-Serialize late ModemAdded exports so both asynchronously initialized slots
-reach the desktop exactly once. Keep exported devices on a manual rescan.
+Preserve real IPv4 addressing and network-port types. Serialize late slot
+exports and refresh SIM properties after insertion. Recompute modem state
+after interface initialization, report SIM property changes and implement
+the Simple.Connect enable step with a bounded registration timeout.
+Keep power operations synchronized with oFono instead of emitting a
+synthetic enabled state. NetworkManager owns reconnection policy; a bearer
+disconnect does not trigger an independent background reconnect.
 
 diff --git a/main.py b/main.py
 index ff7d102..b9fe7e2 100755
@@ -47,38 +49,158 @@ index ff7d102..b9fe7e2 100755
 +                self.mm_modem_interfaces.remove(modem)
 +                self.mm_modem_objects.remove(object_path)
 diff --git a/ofono2mm/mm_bearer.py b/ofono2mm/mm_bearer.py
-index 5317226..2ae595d 100644
+index 5317226..dab2eb4 100644
 --- a/ofono2mm/mm_bearer.py
 +++ b/ofono2mm/mm_bearer.py
-@@ -10,0 +11 @@ import asyncio
+@@ -7 +6,0 @@ from ofono2mm.mm_types import ModemManagerPortType, ModemManagerState
+-from ofono2mm.utils import async_retryable
+@@ -10 +9 @@ from ofono2mm.logger import Logger
+-import asyncio
 +import ipaddress
-@@ -234 +235 @@ class MMBearerInterface(ServiceInterface):
+@@ -28 +26,0 @@ class MMBearerInterface(ServiceInterface):
+-        self.active = False
+@@ -108,0 +107 @@ class MMBearerInterface(ServiceInterface):
++            chosen_auth_method = 'none'
+@@ -140,2 +139,2 @@ class MMBearerInterface(ServiceInterface):
+-            if connman_props.get('RoamingAllowed', Variant('b', True).value) != "":
+-                roaming_allowed = connman_props.get('RoamingAllowed', Variant('b', True).value).value
++            if connman_props.get('RoamingAllowed', Variant('b', True)) != "":
++                roaming_allowed = connman_props.get('RoamingAllowed', Variant('b', True)).value
+@@ -188,0 +188 @@ class MMBearerInterface(ServiceInterface):
++            raise
+@@ -192,4 +192 @@ class MMBearerInterface(ServiceInterface):
+-        try:
+-            await self.doConnect()
+-        except Exception as e:
+-            Logger.error("Error while connecting bearer: %s", e)
++        await self.doConnect()
+@@ -197 +193,0 @@ class MMBearerInterface(ServiceInterface):
+-    @async_retryable()
+@@ -203 +198,0 @@ class MMBearerInterface(ServiceInterface):
+-        self.active = True
+@@ -212 +206,0 @@ class MMBearerInterface(ServiceInterface):
+-        self.active = False
+@@ -227,2 +220,0 @@ class MMBearerInterface(ServiceInterface):
+-            if self.active and not value.value:
+-                asyncio.create_task(self.doConnect())
+@@ -234 +226 @@ class MMBearerInterface(ServiceInterface):
 -                    self.mm_modem.props['Ports'].value.append([value.value['Interface'].value, ModemManagerPortType.AT])
 +                    self.mm_modem.props['Ports'].value.append([value.value['Interface'].value, ModemManagerPortType.NET])
-@@ -241,0 +243,3 @@ class MMBearerInterface(ServiceInterface):
+@@ -241,0 +234,3 @@ class MMBearerInterface(ServiceInterface):
 +            if 'Netmask' in value.value:
 +                prefix = ipaddress.IPv4Network('0.0.0.0/' + value.value['Netmask'].value).prefixlen
 +                self.props['Ip4Config'].value['prefix'] = Variant('u', prefix)
 diff --git a/ofono2mm/mm_modem.py b/ofono2mm/mm_modem.py
-index f1b2072..3e7186d 100644
+index f1b2072..fa396f3 100644
 --- a/ofono2mm/mm_modem.py
 +++ b/ofono2mm/mm_modem.py
 @@ -37,0 +38 @@ import asyncio
 +import ipaddress
-@@ -269,0 +271,2 @@ class MMModemInterface(ServiceInterface):
+@@ -59,0 +61 @@ class MMModemInterface(ServiceInterface):
++        self.power_lock = asyncio.Lock()
+@@ -100 +102,4 @@ class MMModemInterface(ServiceInterface):
+-        for iface in self.ofono_props['Interfaces'].value:
++        priority = ('org.ofono.SimManager', 'org.ofono.RadioSettings',
++                    'org.ofono.NetworkRegistration', 'org.ofono.ConnectionManager')
++        for iface in sorted(self.ofono_props['Interfaces'].value,
++                            key=lambda name: priority.index(name) if name in priority else len(priority)):
+@@ -103,0 +109,5 @@ class MMModemInterface(ServiceInterface):
++        # These supplementary properties are not consumed by the bridge.
++        # Querying them triggers slow network requests during modem startup.
++        if iface in ('org.ofono.CallBarring', 'org.ofono.CallForwarding',
++                     'org.ofono.CallSettings'):
++            return
+@@ -142,0 +153 @@ class MMModemInterface(ServiceInterface):
++        self.set_props()
+@@ -269,0 +281,2 @@ class MMModemInterface(ServiceInterface):
 +                        "address": Variant('s', ip_address),
 +                        "prefix": Variant('u', ipaddress.IPv4Network('0.0.0.0/' + ctx[1]['Settings'].value.get('Netmask', Variant('s', '255.255.255.255')).value).prefixlen),
-@@ -281 +284 @@ class MMModemInterface(ServiceInterface):
+@@ -281 +294 @@ class MMModemInterface(ServiceInterface):
 -                    self.props['Ports'].value.append([ctx[1]['Settings'].value['Interface'].value, ModemManagerPortType.AT])
 +                    self.props['Ports'].value.append([ctx[1]['Settings'].value['Interface'].value, ModemManagerPortType.NET])
-@@ -325,0 +329,2 @@ class MMModemInterface(ServiceInterface):
+@@ -325,0 +339,2 @@ class MMModemInterface(ServiceInterface):
 +                    "address": Variant('s', ip_address),
 +                    "prefix": Variant('u', ipaddress.IPv4Network('0.0.0.0/' + properties['Settings'].value.get('Netmask', Variant('s', '255.255.255.255')).value).prefixlen),
-@@ -375,0 +381,5 @@ class MMModemInterface(ServiceInterface):
+@@ -353 +368 @@ class MMModemInterface(ServiceInterface):
+-        if not self.ofono_props['Powered'].value or 'org.ofono.SimManager' not in self.ofono_interface_props:
++        if not self.ofono_props['Powered'].value:
+@@ -362,0 +378,5 @@ class MMModemInterface(ServiceInterface):
++        if 'org.ofono.SimManager' not in self.ofono_interface_props:
++            self.props['State'] = Variant('i', ModemManagerState.INITIALIZING)
++            self.props['UnlockRequired'] = Variant('u', ModemManagerLock.UNKNOWN)
++            return
++
+@@ -364,0 +385,4 @@ class MMModemInterface(ServiceInterface):
++            if 'Present' not in self.ofono_interface_props['org.ofono.SimManager']:
++                self.props['State'] = Variant('i', ModemManagerState.INITIALIZING)
++                self.props['UnlockRequired'] = Variant('u', ModemManagerLock.UNKNOWN)
++                return
+@@ -375,0 +400,5 @@ class MMModemInterface(ServiceInterface):
 +        if 'PinRequired' not in self.ofono_interface_props['org.ofono.SimManager']:
 +            self.props['State'] = Variant('i', ModemManagerState.INITIALIZING)
 +            self.props['UnlockRequired'] = Variant('u', ModemManagerLock.UNKNOWN)
 +            return
++
+@@ -574,2 +603 @@ class MMModemInterface(ServiceInterface):
+-        if self.props['State'].value == -1:
+-            return
++        await self.set_enabled(enable)
+@@ -577 +605,4 @@ class MMModemInterface(ServiceInterface):
+-        try:
++    async def set_enabled(self, enable):
++        async with self.power_lock:
++            if enable and not self.ofono_props['Powered'].value:
++                await self.ofono_modem.call_set_property('Powered', Variant('b', True))
+@@ -579,4 +610,2 @@ class MMModemInterface(ServiceInterface):
+-        except Exception as e:
+-            pass
+-
+-        self.set_props()
++            self.ofono_props.update(await self.ofono_modem.call_get_properties())
++            self.set_props()
+@@ -651 +680,4 @@ class MMModemInterface(ServiceInterface):
+-        try:
++        if state not in (1, 2, 3):
++            raise DBusError('org.freedesktop.ModemManager1.Error.Core.InvalidArgs',
++                            'Invalid modem power state')
++        async with self.power_lock:
+@@ -653,14 +685 @@ class MMModemInterface(ServiceInterface):
+-        except Exception as e:
+-            pass
+-
+-        if state in [2, 3]:  # If state is 'on' or 'low'
+-            old_state = self.props['State'].value
+-            self.props['State'] = Variant('i', 6)  # 6 typically represents an enabled state
+-            self.StateChanged(old_state, self.props['State'].value, 1)
+-            self.emit_properties_changed({'State': self.props['State'].value})
+-
+-            try:
+-                await self.ofono_modem.call_set_property('Online', Variant('b', enable))
+-            except Exception as e:
+-                pass
+-
++            self.ofono_props.update(await self.ofono_modem.call_get_properties())
+@@ -874,0 +894,2 @@ class MMModemInterface(ServiceInterface):
++                if iface == 'org.ofono.SimManager' and name in ('Present', 'PinRequired'):
++                    self.loop.create_task(self.refresh_ofono_interface(iface))
+@@ -877,0 +899,18 @@ class MMModemInterface(ServiceInterface):
++    async def refresh_ofono_interface(self, iface):
++        if iface not in self.ofono_interfaces or iface not in self.ofono_interface_props:
++            return
++
++        try:
++            properties = await self.ofono_interfaces[iface].call_get_properties()
++        except (DBusError, AttributeError):
++            return
++
++        self.ofono_interface_props[iface] = properties
++        self.set_props()
++        if self.mm_modem3gpp_interface is not None:
++            self.mm_modem3gpp_interface.ofono_interface_props = self.ofono_interface_props.copy()
++            self.mm_modem3gpp_interface.set_props()
++        if self.mm_sim_interface is not None:
++            self.mm_sim_interface.ofono_interface_props = self.ofono_interface_props.copy()
++            self.mm_sim_interface.set_props()
 +
 diff --git a/ofono2mm/mm_modem_3gpp.py b/ofono2mm/mm_modem_3gpp.py
 index 999917e..4b97cb9 100644
@@ -87,3 +209,66 @@ index 999917e..4b97cb9 100644
 @@ -32 +32 @@ class MMModem3gppInterface(ServiceInterface):
 -                'dtx-cycle': Variant('u', 0) # hardcoded value unknown MM_MODEM_3GPP_DRX_CYCLE_UNKNOWN
 +                'drx-cycle': Variant('u', 0) # hardcoded value unknown MM_MODEM_3GPP_DRX_CYCLE_UNKNOWN
+diff --git a/ofono2mm/mm_modem_simple.py b/ofono2mm/mm_modem_simple.py
+index 7d30ca8..a1ee0d3 100644
+--- a/ofono2mm/mm_modem_simple.py
++++ b/ofono2mm/mm_modem_simple.py
+@@ -3 +3 @@ from dbus_next.constants import PropertyAccess
+-from dbus_next import Variant
++from dbus_next import Variant, DBusError
+@@ -100,22 +100,23 @@ class MMModemSimpleInterface(ServiceInterface):
+-            await self.props()
+-        except Exception as e:
+-            pass
+-
+-        try:
+-            path = self.mm_modem.get_bearer_path_for_apn(properties['apn'].value)
+-            if path is None:
+-                path = await self.mm_modem.doCreateBearer(properties)
+-
+-            bearer = self.mm_modem.bearers[path]
+-            bearer.update_properties(properties)
+-
+-            # From ModemManager documentation:
+-            # this call may wait for network registration
+-            while self.mm_modem.props['State'].value < ModemManagerState.REGISTERED:
+-                await asyncio.sleep(1)
+-
+-            Logger.info('Using bearer %s for %s', path, properties['apn'].value)
+-            await bearer.doConnect()
+-        except Exception as e:
+-            Logger.error("Error while connecting bearer: %s", e)
+-
++            return await asyncio.wait_for(self.connect(properties), timeout=120)
++        except asyncio.TimeoutError:
++            raise DBusError('org.freedesktop.ModemManager1.Error.MobileEquipment.NetworkTimeout',
++                            'Timed out waiting for mobile data registration')
++
++    async def connect(self, properties):
++        # Simple.Connect must enable the modem as part of connecting. Merely
++        # waiting for registration deadlocks when oFono starts offline.
++        await self.mm_modem.set_enabled(True)
++        while self.mm_modem.props['State'].value < ModemManagerState.REGISTERED:
++            if self.mm_modem.props['State'].value in (ModemManagerState.FAILED,
++                                                     ModemManagerState.LOCKED):
++                raise DBusError('org.freedesktop.ModemManager1.Error.Core.WrongState',
++                                'A present, unlocked SIM is required')
++            await asyncio.sleep(1)
++
++        path = self.mm_modem.get_bearer_path_for_apn(properties['apn'].value)
++        if path is None:
++            path = await self.mm_modem.doCreateBearer(properties)
++        bearer = self.mm_modem.bearers[path]
++        bearer.update_properties(properties)
++        Logger.info('Using bearer %s for %s', path, properties['apn'].value)
++        await bearer.doConnect()
+diff --git a/ofono2mm/mm_sim.py b/ofono2mm/mm_sim.py
+index d1763b8..987a11f 100644
+--- a/ofono2mm/mm_sim.py
++++ b/ofono2mm/mm_sim.py
+@@ -35 +35 @@ class MMSimInterface(ServiceInterface):
+-        old_props = self.props
++        old_props = self.props.copy()
+@@ -39 +39 @@ class MMSimInterface(ServiceInterface):
+-                if self.ofono_interface_props['org.ofono.SimManager']['Present']:
++                if self.ofono_interface_props['org.ofono.SimManager']['Present'].value:

@@ -1,0 +1,15 @@
+[connection]
+id=移动网络（自动）
+uuid=a234a94d-8600-4e84-b2b6-205cf9aaec48
+type=gsm
+autoconnect=true
+autoconnect-priority=-10
+
+[gsm]
+auto-config=true
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto

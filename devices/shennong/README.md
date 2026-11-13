@@ -175,8 +175,11 @@ sudo bash devices/shennong/tools/build-ofono-plugin.sh /path/to/droidian-build-r
 The helper pins upstream commit `9b9e8bd2ffc8a6ba482d6daf7171fd84ba82c3b8`,
 runs its tests and builds a `+shennong2` Debian package. Also run
 `sudo bash devices/shennong/tools/build-ofono2mm.sh` to package the isolated
-address-prefix, network-port and asynchronous SIM-initialization fixes against the pinned
-upstream modem bridge. Device image preparation requires both packages.
+address-prefix, network-port and late SIM-property refresh fixes against the pinned
+upstream modem bridge. It produces a `+shennong7` package. Device image preparation
+requires both packages.
+For a rebuild with inputs already cached, set `SHENNONG_OFFLINE=1`; the helper
+still verifies the archive signature and all cached package hashes.
 Changes to the upstream plugin are kept as a separate patch; the stock
 Android Radio binaries and modem firmware are used unchanged. Both SIM slots use stable AIDL on `/dev/binder`.
 The first initialized SIM is selected once through oFono's own default;
@@ -187,6 +190,17 @@ namespaces.
 The packaged ModemManager bridge explicitly starts after oFono. Its upstream
 unit required oFono but did not order startup, allowing the bridge to enumerate
 the radio before the SIM interface was ready.
+
+Mobile connection policy belongs to NetworkManager. The packaged GSM keyfile
+uses `gsm.auto-config=true` and the distribution's provider database, with no
+device-specific SIM identifier or fixed carrier APN. Saved custom profiles
+take priority. Phosh/GNOME Settings can change the same standard connection.
+The bridge implements the normal Simple.Connect enable step, propagates errors
+and bounds registration waits. It serializes modem power changes, and reports
+the actual oFono state. NetworkManager handles reconnection; the bearer has no
+separate retry loop or background reconnect after an explicit disconnect.
+The unused direct-oFono pseudo devices remain strictly unmanaged, including
+when the desktop's global mobile-data switch changes.
 
 USB defaults to NCM shared networking at `192.168.66.1/24`. Its fixed local
 SSH address and NetworkManager's shared-mode DHCP/DNS/NAT are enabled without

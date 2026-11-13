@@ -11,7 +11,9 @@ if [ ! -d "$cache/.git" ]; then
 fi
 git -C "$cache" cat-file -e "$revision^{commit}" 2>/dev/null || \
     git -C "$cache" fetch --depth 1 origin "$revision"
-python3 "$here/fetch-inputs.py" --output "$repo/out/shennong/inputs" --download
+fetch_args=(--output "$repo/out/shennong/inputs" --download)
+[ "${SHENNONG_OFFLINE:-0}" != 1 ] || fetch_args+=(--offline)
+python3 "$here/fetch-inputs.py" "${fetch_args[@]}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 git -C "$cache" archive "$revision" | tar -x -C "$work"
@@ -32,7 +34,7 @@ if 'feedd6c' not in base['version']:
 archive = inputs / 'packages' / Path(base['filename']).name
 if hashlib.sha256(archive.read_bytes()).hexdigest() != base['sha256']:
     raise SystemExit('Upstream bridge package checksum mismatch')
-version = base['version'] + '+shennong2'
+version = base['version'] + '+shennong7'
 out = repo / 'out/shennong/telephony-packages'
 out.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='shennong-ofono2mm-') as temporary:
