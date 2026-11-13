@@ -71,6 +71,7 @@ mkdir -p "$root/var/cache/shennong-adaptation"
 cp "$work/"*.deb "$root/var/cache/shennong-adaptation/"
 chroot "$root" /bin/sh -c 'dpkg --force-confnew -i /var/cache/shennong-adaptation/*.deb'
 rm -r "$root/var/cache/shennong-adaptation"
+bash "$here/install-wifi-config.sh" "$root"
 bash "$here/install-binder-compat.sh" "$root"
 bash "$here/install-usb-framework.sh" "$root"
 bash "$here/install-cellular-runtime.sh" "$root"

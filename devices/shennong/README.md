@@ -154,20 +154,37 @@ hardware stage. NetworkManager and the distribution's wpa_supplicant keep
 ownership of scanning, saved networks, authentication and DHCP; there is no
 independent reconnection loop or parallel Android Wi-Fi controller.
 
-The firmware directory contains links to the original vendor WLAN INI and
-the read-only persist MAC file. The early ramdisk's `/vendor/firmware` mount
-hides the original vendor symlinks, so the links in the native firmware search
-directory are required. The distribution's signed `wireless-regdb` package
+The firmware directory exposes the read-only persist MAC file and a host
+configuration derived from the hash-checked stock vendor INI at image-build
+time. The early ramdisk's `/vendor/firmware` mount hides the original vendor
+symlinks, so the native firmware search directory is required. The
+distribution's signed `wireless-regdb` package
 supplies the standard Linux regulatory database. Proprietary configuration
 and calibration contents are not copied into Git. The unused Android Wi-Fi
 HAL is disabled rather than repeatedly failing a request for module-loading
 capabilities that belong to the host.
 
+The captured WLAN module uses Qualcomm's `IPA_OPT_WIFI_DP` configuration
+semantics: `gIPAConfig=0` enables the 0x27d offload profile, while
+`0xEEEEEEEE` selects the native host data path. This was verified against
+MiCode's shennong source and the actual captured module. The offload profile
+stalled for about a minute while tearing down an idle interface, leaving
+NetworkManager unable to reopen it after Wi-Fi off/on. The build-time
+`install-wifi-config.sh` helper derives only this setting in a separate host
+file; original vendor images and driver binaries are unchanged. Normal
+driver idle shutdown and station power saving remain enabled. There is no
+runtime INI rewrite, repeated module reload or autonomous reconnect script.
+
 On 2026-11-14 the owner-confirmed brightness fix survived a power-key off/on
 cycle. Wi-Fi subsequently exposed its station interface and scanned real
 2.4 GHz and 5 GHz access points. Hardware initialization and scanning also
-passed after a fresh boot with adaptation 0.1.10. An actual connection to an
-owner-selected network, Internet access and reconnect remain pending.
+passed after a fresh boot with adaptation 0.1.10. The owner subsequently
+connected a network and obtained a DHCP address. With the native host data
+path, radio off/on completed a real idle shutdown and automatically rejoined
+the saved network in about six seconds, with zero driver-busy errors. DHCP
+and a source-bound HTTP request over Wi-Fi were verified. The selected
+network redirects HTTP to a captive portal and refuses HTTPS before its
+web authentication; unrestricted Internet access remains pending that login.
 
 Build the pinned 6.1.138 source with the captured stock config:
 

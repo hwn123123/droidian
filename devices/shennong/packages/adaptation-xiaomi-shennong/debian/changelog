@@ -1,3 +1,12 @@
+adaptation-xiaomi-shennong (0.1.11) unstable; urgency=medium
+
+  * Select the stock driver's documented native-host WLAN data path.
+  * Keep normal idle power-down and recover Wi-Fi after radio off/on.
+  * Require the configuration derived from the hash-checked private vendor
+    input, without modifying vendor files or installing a runtime policy loop.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 01:30:00 +0800
+
 adaptation-xiaomi-shennong (0.1.10) unstable; urgency=medium
 
   * Initialize the stock WLAN module through systemd before the supplicant.
