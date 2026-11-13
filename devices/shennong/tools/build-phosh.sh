@@ -6,7 +6,7 @@ repo=$(cd "$here/../../.." && pwd)
 out=${SHENNONG_UI_OUT:-$repo/out/shennong/ui-packages}
 cache=${SHENNONG_UI_CACHE:-$repo/out/shennong/ui-source-cache}
 revision=bee1861911b0cf75f50ab00cea5a84ed98d9c32f
-version=0.55.0+git20260824233009.bee1861.next.phosh.0.55+shennong4
+version=0.55.0+git20260824233009.bee1861.next.phosh.0.55+shennong6
 [[ $(dpkg --print-architecture) == arm64 ]]
 mkdir -p "$cache" "$out"
 work=$(mktemp -d)
@@ -34,8 +34,8 @@ for change in "$here/../patches/phosh/"*.patch; do
 done
 {
     printf 'phosh (%s) unstable; urgency=medium\n\n' "$version"
-    printf '  * Add native home, fixed favorites dock and touch app ordering.\n\n'
-    printf ' -- Ning <hwn123123@users.noreply.github.com>  Fri, 13 Nov 2026 19:00:00 +0800\n\n'
+    printf '  * Keep native home, dock and touch ordering; show only active status indicators.\n\n'
+    printf ' -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 09:00:00 +0800\n\n'
     cat "$work/source/debian/changelog"
 } > "$work/changelog"
 mv "$work/changelog" "$work/source/debian/changelog"

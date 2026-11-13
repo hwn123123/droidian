@@ -1,0 +1,290 @@
+diff --git a/src/bt-info.c b/src/bt-info.c
+--- a/src/bt-info.c
++++ b/src/bt-info.c
+@@ -30,6 +30,7 @@
+   PROP_0,
+   PROP_ENABLED,
+   PROP_PRESENT,
++  PROP_CONNECTED,
+   PROP_LAST_PROP
+ };
+ static GParamSpec *props[PROP_LAST_PROP];
+@@ -39,6 +40,7 @@
+
+   gboolean        enabled;
+   gboolean        present;
++  gboolean        connected;
+   PhoshBtManager *bt;
+ };
+ G_DEFINE_TYPE (PhoshBtInfo, phosh_bt_info, PHOSH_TYPE_STATUS_ICON);
+@@ -56,6 +58,9 @@
+   case PROP_ENABLED:
+     g_value_set_boolean (value, self->enabled);
+     break;
++  case PROP_CONNECTED:
++    g_value_set_boolean (value, self->connected);
++    break;
+   case PROP_PRESENT:
+     g_value_set_boolean (value, self->present);
+     break;
+@@ -91,6 +96,11 @@
+   g_return_if_fail (PHOSH_IS_BT_INFO (self));
+
+   enabled = phosh_bt_manager_get_enabled (self->bt);
++  n_connected = phosh_bt_manager_get_n_connected (self->bt);
++  if (self->connected != (enabled && n_connected > 0)) {
++    self->connected = enabled && n_connected > 0;
++    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_CONNECTED]);
++  }
+   if (!enabled) {
+     phosh_status_icon_set_info (PHOSH_STATUS_ICON (self), _("Bluetooth"));
+     return;
+@@ -243,6 +253,11 @@
+                           G_PARAM_STATIC_STRINGS |
+                           G_PARAM_EXPLICIT_NOTIFY);
+
++  props[PROP_CONNECTED] =
++    g_param_spec_boolean ("connected", "Connected", "Whether a Bluetooth device is connected",
++                          FALSE, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS |
++                          G_PARAM_EXPLICIT_NOTIFY);
++
+   g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
+ }
+
+diff --git a/src/wifi-info.c b/src/wifi-info.c
+--- a/src/wifi-info.c
++++ b/src/wifi-info.c
+@@ -29,6 +29,7 @@
+   PROP_0,
+   PROP_ENABLED,
+   PROP_PRESENT,
++  PROP_CONNECTED,
+   PROP_LAST_PROP
+ };
+ static GParamSpec *props[PROP_LAST_PROP];
+@@ -38,6 +39,7 @@
+
+   gboolean          enabled;
+   gboolean          present;
++  gboolean          connected;
+   PhoshWifiManager *wifi;
+ };
+ G_DEFINE_TYPE (PhoshWifiInfo, phosh_wifi_info, PHOSH_TYPE_STATUS_ICON);
+@@ -53,6 +55,9 @@
+   switch (property_id) {
+   case PROP_ENABLED:
+     g_value_set_boolean (value, self->enabled);
++    break;
++  case PROP_CONNECTED:
++    g_value_set_boolean (value, self->connected);
+     break;
+   case PROP_PRESENT:
+     g_value_set_boolean (value, self->present);
+@@ -91,6 +96,20 @@
+ }
+
+ static void
++update_connected (PhoshWifiInfo *self)
++{
++  gboolean connected = phosh_wifi_manager_get_enabled (self->wifi) &&
++    phosh_wifi_manager_get_state (self->wifi) == NM_ACTIVE_CONNECTION_STATE_ACTIVATED;
++
++  if (self->connected == connected)
++    return;
++
++  self->connected = connected;
++  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_CONNECTED]);
++}
++
++
++static void
+ on_wifi_enabled (PhoshWifiInfo *self, GParamSpec *pspec, PhoshWifiManager *wifi)
+ {
+   gboolean enabled;
+@@ -99,6 +118,7 @@
+   g_return_if_fail (PHOSH_IS_WIFI_INFO (self));
+   g_return_if_fail (PHOSH_IS_WIFI_MANAGER (wifi));
+
++  update_connected (self);
+   enabled = phosh_wifi_manager_get_enabled (wifi);
+   if (self->enabled == enabled)
+     return;
+@@ -150,6 +170,9 @@
+     g_warning ("Failed to get Wi-Fi manager");
+     return;
+   }
++
++  g_signal_connect_object (self->wifi, "notify::state",
++                           G_CALLBACK (update_connected), self, G_CONNECT_SWAPPED);
+
+   g_signal_connect_swapped (self->wifi,
+                             "notify::icon-name",
+@@ -228,6 +251,11 @@
+                           G_PARAM_STATIC_STRINGS |
+                           G_PARAM_EXPLICIT_NOTIFY);
+
++  props[PROP_CONNECTED] =
++    g_param_spec_boolean ("connected", "Connected", "Whether Wi-Fi has an active connection",
++                          FALSE, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS |
++                          G_PARAM_EXPLICIT_NOTIFY);
++
+   g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
+ }
+
+diff --git a/src/connectivity-manager.c b/src/connectivity-manager.c
+--- a/src/connectivity-manager.c
++++ b/src/connectivity-manager.c
+@@ -29,6 +29,7 @@
+ enum {
+   PROP_0,
+   PROP_CONNECTIVITY,
++  PROP_SHOW_WARNING,
+   PROP_ICON_NAME,
+   PROP_LAST_PROP
+ };
+@@ -41,6 +42,7 @@
+   char                *ssid;
+
+   gboolean             connectivity;
++  gboolean             show_warning;
+   NMClient            *nmclient;
+   GCancellable        *cancel;
+
+@@ -144,6 +146,9 @@
+   PhoshConnectivityManager *self = PHOSH_CONNECTIVITY_MANAGER (object);
+
+   switch (property_id) {
++  case PROP_SHOW_WARNING:
++    g_value_set_boolean (value, self->show_warning);
++    break;
+   case PROP_CONNECTIVITY:
+     g_value_set_boolean (value, self->connectivity);
+     break;
+@@ -162,11 +167,20 @@
+   const char *icon_name;
+   NMConnectivityState state;
+   gboolean connectivity = FALSE;
++  gboolean show_warning;
+
+   g_return_if_fail (PHOSH_IS_CONNECTIVITY_MANAGER (self));
+   g_return_if_fail (NM_IS_CLIENT (nmclient));
+
+   state = nm_client_get_connectivity (nmclient);
++  /* An unknown probe or an intentionally disconnected radio is not a fault. */
++  show_warning = nm_client_get_state (nmclient) >= NM_STATE_CONNECTED_LOCAL &&
++    (state == NM_CONNECTIVITY_NONE || state == NM_CONNECTIVITY_LIMITED ||
++     state == NM_CONNECTIVITY_PORTAL);
++  if (self->show_warning != show_warning) {
++    self->show_warning = show_warning;
++    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_SHOW_WARNING]);
++  }
+
+   if (self->state == state)
+     return;
+@@ -233,6 +247,8 @@
+   g_signal_connect_swapped (self->nmclient, "notify::connectivity",
+                             G_CALLBACK (on_connectivity_changed), self);
+
++  g_signal_connect_swapped (self->nmclient, "notify::state",
++                            G_CALLBACK (on_connectivity_changed), self);
+   on_connectivity_changed (self, NULL, self->nmclient);
+ }
+
+@@ -293,6 +309,11 @@
+                          G_PARAM_STATIC_STRINGS |
+                          G_PARAM_EXPLICIT_NOTIFY);
+
++  props[PROP_SHOW_WARNING] =
++    g_param_spec_boolean ("show-warning", "Show warning", "A connected link has a confirmed Internet problem",
++                          FALSE, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS |
++                          G_PARAM_EXPLICIT_NOTIFY);
++
+   g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
+ }
+
+diff --git a/src/connectivity-info.c b/src/connectivity-info.c
+--- a/src/connectivity-info.c
++++ b/src/connectivity-info.c
+@@ -34,6 +34,7 @@
+ enum {
+   PROP_0,
+   PROP_CONNECTIVITY,
++  PROP_SHOW_WARNING,
+   PROP_LAST_PROP
+ };
+ static GParamSpec *props[PROP_LAST_PROP];
+@@ -42,6 +43,7 @@
+   PhoshStatusIcon           parent;
+
+   gboolean                  connectivity;
++  gboolean                  show_warning;
+   PhoshConnectivityManager *connectivity_manager;
+ };
+ G_DEFINE_TYPE (PhoshConnectivityInfo, phosh_connectivity_info, PHOSH_TYPE_STATUS_ICON);
+@@ -56,6 +58,9 @@
+   PhoshConnectivityInfo *self = PHOSH_CONNECTIVITY_INFO (obj);
+
+   switch (prop_id) {
++  case PROP_SHOW_WARNING:
++    self->show_warning = g_value_get_boolean (value);
++    break;
+   case PROP_CONNECTIVITY:
+     self->connectivity = g_value_get_boolean (value);
+     break;
+@@ -75,6 +80,9 @@
+   PhoshConnectivityInfo *self = PHOSH_CONNECTIVITY_INFO (object);
+
+   switch (property_id) {
++  case PROP_SHOW_WARNING:
++    g_value_set_boolean (value, self->show_warning);
++    break;
+   case PROP_CONNECTIVITY:
+     g_value_set_boolean (value, self->connectivity);
+     break;
+@@ -96,6 +104,7 @@
+   manager = phosh_shell_get_connectivity_manager (phosh_shell_get_default ());
+   g_return_if_fail (PHOSH_IS_CONNECTIVITY_MANAGER (manager));
+
++  g_object_bind_property (manager, "show-warning", self, "show-warning", G_BINDING_SYNC_CREATE);
+   g_object_bind_property (manager, "connectivity", self, "connectivity", G_BINDING_SYNC_CREATE);
+   g_object_bind_property (manager, "icon-name", self, "icon-name", G_BINDING_SYNC_CREATE);
+ }
+@@ -122,6 +131,9 @@
+                           FALSE,
+                           G_PARAM_READWRITE |
+                           G_PARAM_STATIC_STRINGS);
++  props[PROP_SHOW_WARNING] =
++    g_param_spec_boolean ("show-warning", "Show warning", "A connected link has a confirmed Internet problem",
++                          FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+   g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
+ }
+
+diff --git a/src/ui/top-panel.ui b/src/ui/top-panel.ui
+--- a/src/ui/top-panel.ui
++++ b/src/ui/top-panel.ui
+@@ -231,14 +231,14 @@
+                         <child>
+                           <object class="PhoshRevealer">
+                             <property name="visible">1</property>
+-                            <property name="show-child" bind-source="wifiinfo" bind-property="present" bind-flags="sync-create"/>
++                            <property name="show-child" bind-source="wifiinfo" bind-property="connected" bind-flags="sync-create"/>
+                             <property name="child">wifiinfo</property>
+                           </object>
+                         </child>
+                         <child>
+                           <object class="PhoshRevealer">
+                             <property name="visible">1</property>
+-                            <property name="show-child" bind-source="btinfo" bind-property="present" bind-flags="sync-create"/>
++                            <property name="show-child" bind-source="btinfo" bind-property="connected" bind-flags="sync-create"/>
+                             <property name="child">btinfo</property>
+                           </object>
+                         </child>
+@@ -252,7 +252,7 @@
+                         <child>
+                           <object class="PhoshRevealer">
+                             <property name="visible">1</property>
+-                            <property name="show-child" bind-source="connectivity_info" bind-property="connectivity" bind-flags="invert-boolean|sync-create"/>
++                            <property name="show-child" bind-source="connectivity_info" bind-property="show-warning" bind-flags="sync-create"/>
+                             <property name="child">connectivity_info</property>
+                           </object>
+                         </child>

@@ -14,6 +14,12 @@ clock-show-date=false
 [org.gnome.desktop.interface]
 clock-format='24h'
 
+[org.gnome.system.location]
+enabled=false
+
+[org.gnome.clocks]
+geolocation=false
+
 [org.gnome.desktop.background:Phosh]
 picture-uri='file:///usr/share/backgrounds/shennong/tide-dark.png'
 picture-uri-dark='file:///usr/share/backgrounds/shennong/tide-dark.png'

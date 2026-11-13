@@ -1,3 +1,10 @@
+adaptation-xiaomi-shennong (0.1.17) unstable; urgency=medium
+
+  * Default location access and automatic clock geolocation to disabled through
+    the original GNOME settings, preserving the system controls for later use.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 09:00:00 +0800
+
 adaptation-xiaomi-shennong (0.1.16) unstable; urgency=medium
 
   * Order Phosh after the native audio hardware handoff so its PulseAudio

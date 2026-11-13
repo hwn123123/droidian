@@ -33,7 +33,7 @@ for package in lock['packages']:
         raise SystemExit(f'Appearance package checksum mismatch: {path}')
     archives.append(path)
 
-version = '0.55.0+git20260824233009.bee1861.next.phosh.0.55+shennong4'
+version = '0.55.0+git20260824233009.bee1861.next.phosh.0.55+shennong6'
 output = repo / 'out/shennong/ui-packages'
 for name, architecture in [('phosh', 'arm64'), ('phosh-common', 'all'),
                            ('phosh-plugins', 'arm64'), ('phosh-mobile-tweaks', 'all')]:

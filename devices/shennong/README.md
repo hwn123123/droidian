@@ -95,7 +95,7 @@ login or boot task forcing the language/timezone back after a user changes it.
 
 The phone home is an isolated patch against Droidian Phosh revision
 `bee1861911b0cf75f50ab00cea5a84ed98d9c32f`, not a second launcher or a startup
-script. Its Debian version is the upstream version plus `+shennong4`.
+script. Its Debian version is the upstream version plus `+shennong6`.
 Build it inside a matching arm64 Droidian `next` build environment:
 
 ```sh
@@ -110,6 +110,32 @@ environment. The helper pins the shell and both subprojects, applies the
 device patch and exports four runtime packages to `out/shennong/ui-packages/`.
 Run this before `build-device-image.sh`; offline image preparation installs
 these packages and checks the appearance inputs against `ui-packages.json`.
+
+The top bar follows active use rather than hardware presence: Wi-Fi appears
+for an activated connection (including a running hotspot), Bluetooth only
+when a device is connected, and location only while GeoClue reports active
+use. Quick settings retain their original enable/disable controls. The
+separate connectivity warning is hidden while NetworkManager is starting,
+while disconnected and when Internet access is confirmed; a connected link
+with limited access or a captive portal still displays its real warning.
+On dual-modem devices the WWAN indicator prefers a SIM-present, connected
+or registered modem, reselecting on SIM/state changes and device removal.
+It does not fix a slot number or depend on D-Bus enumeration order. An empty
+second slot must not replace the active SIM's signal with a missing-SIM icon.
+The hotspot plugin's SVG resources use GTK's scalable/status directory so
+the disabled/acquiring states resolve in the selected icon theme too.
+
+Location and the clock application's automatic geolocation default to off
+through their original GNOME GSettings schemas. Users can enable location
+normally in Settings; no service mask or background shutdown loop overrides
+their selection.
+
+On 2026-11-14 the hardware reported Bluetooth soft-blocked and GeoClue
+reported `InUse=false` after disabling location through Settings. The old
+WWAN indicator had selected the empty modem; the revised selection reached
+the SIM-present modem in state `CONNECTED` with access technology `5G`.
+Native GTK icon lookup also resolved both hotspot disabled/acquiring SVGs.
+The production shell contains no temporary widget tracing or debug override.
 
 The main page has a clock and favorite launchers. Swipe left for the remaining
 apps and right to return. The first four native Phosh favorites form a fixed

@@ -1,0 +1,137 @@
+diff --git a/src/wwan/phosh-wwan-mm.c b/src/wwan/phosh-wwan-mm.c
+--- a/src/wwan/phosh-wwan-mm.c
++++ b/src/wwan/phosh-wwan-mm.c
+@@ -521,12 +521,44 @@
+ }
+
+
++static int
++modem_priority (MMObject *object)
++{
++  MMModem *modem = mm_object_peek_modem (object);
++  MMModemState state;
++  const char *sim;
++  int priority;
++
++  if (!modem)
++    return -1;
++
++  sim = mm_modem_get_sim_path (modem);
++  priority = sim && !g_str_equal (sim, "/") ? 100 : 0;
++  state = mm_modem_get_state (modem);
++  if (state == MM_MODEM_STATE_CONNECTED)
++    return priority + 40;
++  if (state >= MM_MODEM_STATE_REGISTERED)
++    return priority + 30;
++  if (state >= MM_MODEM_STATE_ENABLED)
++    return priority + 20;
++  return priority + 10;
++}
++
++
+ static void
+ on_mm_object_added (PhoshWWanMM *self, GDBusObject *object, MMManager *manager)
+ {
+   g_debug ("Modem added at path: %s", g_dbus_object_get_object_path (object));
+
+-  if (!self->object) {
++  /* Object enumeration order must not make an empty SIM slot the indicator. */
++  if (!MM_IS_OBJECT (object) || modem_priority (MM_OBJECT (object)) < 0)
++    return;
++  if (self->object && modem_priority (MM_OBJECT (object)) <= modem_priority (self->object))
++    return;
++
++  {
++    if (self->object)
++      phosh_wwan_mm_destroy_modem (self);
+     g_debug ("Tracking modem at: %s", g_dbus_object_get_object_path (object));
+
+     self->object = g_object_ref (MM_OBJECT (object));
+@@ -548,6 +580,39 @@
+
+
+ static void
++select_available_modem (PhoshWWanMM *self)
++{
++  g_autolist (GDBusObject) modems =
++    g_dbus_object_manager_get_objects (G_DBUS_OBJECT_MANAGER (self->manager));
++
++  for (GList *l = modems; l; l = l->next)
++    on_mm_object_added (self, l->data, self->manager);
++}
++
++
++static void
++on_any_modem_properties_changed (GDBusObjectManagerClient *manager,
++                                 GDBusObjectProxy         *object,
++                                 GDBusProxy               *interface,
++                                 GVariant                 *changed,
++                                 GStrv                     invalidated,
++                                 PhoshWWanMM              *self)
++{
++  g_autoptr (GVariant) sim = NULL;
++  g_autoptr (GVariant) state = NULL;
++
++  if (!g_str_equal (g_dbus_proxy_get_interface_name (interface),
++                    "org.freedesktop.ModemManager1.Modem"))
++    return;
++
++  sim = g_variant_lookup_value (changed, "Sim", NULL);
++  state = g_variant_lookup_value (changed, "State", NULL);
++  if (sim || state)
++    select_available_modem (self);
++}
++
++
++static void
+ on_mm_object_removed (PhoshWWanMM *self, GDBusObject *object, MMManager *manager)
+ {
+   g_debug ("Modem removed at path: %s", g_dbus_object_get_object_path (object));
+@@ -555,6 +620,7 @@
+   if (self->object == MM_OBJECT (object)) {
+     g_debug ("Dropping modem at: %s", g_dbus_object_get_object_path (object));
+     phosh_wwan_mm_destroy_modem (self);
++    select_available_modem (self);
+   }
+ }
+
+@@ -564,7 +630,6 @@
+ {
+   PhoshWWanMM *self = PHOSH_WWAN_MM (user_data);
+   g_autoptr (GError) err = NULL;
+-  g_autolist (GDBusObject) modems = NULL;
+   MMManager *manager;
+
+   manager = mm_manager_new_finish (res, &err);
+@@ -585,13 +650,10 @@
+                             G_CALLBACK (on_mm_object_removed),
+                             self);
+
+-  modems = g_dbus_object_manager_get_objects (G_DBUS_OBJECT_MANAGER (self->manager));
+-  if (modems) {
+-    /* Cold plug first modem */
+-    on_mm_object_added (self, modems->data, self->manager);
+-  } else {
+-    g_debug ("No modem found");
+-  }
++  g_signal_connect (self->manager, "interface-proxy-properties-changed",
++                    G_CALLBACK (on_any_modem_properties_changed), self);
++
++  select_available_modem (self);
+ }
+
+
+diff --git a/plugins/wifi-hotspot-quick-setting/phosh-plugin-wifi-hotspot-quick-setting.gresources.xml b/plugins/wifi-hotspot-quick-setting/phosh-plugin-wifi-hotspot-quick-setting.gresources.xml
+--- a/plugins/wifi-hotspot-quick-setting/phosh-plugin-wifi-hotspot-quick-setting.gresources.xml
++++ b/plugins/wifi-hotspot-quick-setting/phosh-plugin-wifi-hotspot-quick-setting.gresources.xml
+@@ -3,8 +3,8 @@
+   <gresource prefix="/mobi/phosh/plugins/wifi-hotspot-quick-setting/">
+     <file preprocess="xml-stripblanks">status-page.ui</file>
+     <file preprocess="xml-stripblanks">qs.ui</file>
+-    <file compressed="true">icons/network-wireless-hotspot-disabled-symbolic.svg</file>
+-    <file compressed="true">icons/network-wireless-hotspot-acquiring-symbolic.svg</file>
++    <file alias="icons/scalable/status/network-wireless-hotspot-disabled-symbolic.svg" compressed="true">icons/network-wireless-hotspot-disabled-symbolic.svg</file>
++    <file alias="icons/scalable/status/network-wireless-hotspot-acquiring-symbolic.svg" compressed="true">icons/network-wireless-hotspot-acquiring-symbolic.svg</file>
+     <file compressed="true">style.css</file>
+   </gresource>
+ </gresources>
