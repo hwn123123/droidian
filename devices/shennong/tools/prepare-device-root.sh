@@ -79,7 +79,7 @@ radio_packages=("$repo/out/shennong/telephony-packages/"ofono-binder-plugin_*+sh
 install -m644 "${radio_packages[0]}" "$root/tmp/shennong-ofono.deb"
 chroot "$root" dpkg -i /tmp/shennong-ofono.deb
 rm "$root/tmp/shennong-ofono.deb"
-bridge_packages=("$repo/out/shennong/telephony-packages/"ofono2mm_*+shennong7_all.deb)
+bridge_packages=("$repo/out/shennong/telephony-packages/"ofono2mm_*+shennong15_all.deb)
 [ "${#bridge_packages[@]}" = 1 ] && [ -s "${bridge_packages[0]}" ] || {
     echo 'Build the device modem bridge with tools/build-ofono2mm.sh first.' >&2
     exit 1

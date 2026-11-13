@@ -8,33 +8,101 @@ the Simple.Connect enable step with a bounded registration timeout.
 Keep power operations synchronized with oFono instead of emitting a
 synthetic enabled state. NetworkManager owns reconnection policy; a bearer
 disconnect does not trigger an independent background reconnect.
+Subscribe before initial snapshots and publish complete late modem objects
+from the manager's ObjectManager path for libmm-glib clients.
 
 diff --git a/main.py b/main.py
-index ff7d102..b9fe7e2 100755
+index ff7d102..2db0bce 100755
 --- a/main.py
 +++ b/main.py
-@@ -26,0 +27 @@ class MMInterface(ServiceInterface):
+@@ -7 +7 @@ from dbus_next.constants import PropertyAccess
+-from dbus_next import DBusError, BusType
++from dbus_next import DBusError, BusType, Message, MessageType, Variant
+@@ -9,0 +10 @@ import asyncio
++import inspect
+@@ -17,0 +19,50 @@ has_bus = False
++class MMMessageBus(MessageBus):
++    manager_path = '/org/freedesktop/ModemManager1'
++
++    def __init__(self, **kwargs):
++        super().__init__(**kwargs)
++        self.pending_modems = {}
++
++    def export(self, path, interface):
++        if path.startswith(self.manager_path + '/Modem/'):
++            self.pending_modems.setdefault(path, []).append(interface)
++        else:
++            super().export(path, interface)
++
++    def send(self, message):
++        if (message.message_type == MessageType.SIGNAL and
++                message.interface == 'org.freedesktop.DBus.ObjectManager'):
++            # dbus-next emits ObjectManager signals on the child path.
++            # libmm-glib listens on the manager, and NetworkManager needs
++            # the complete modem object rather than its first interface.
++            if message.path.startswith(self.manager_path + '/Modem/'):
++                if message.member == 'InterfacesAdded':
++                    done = asyncio.get_running_loop().create_future()
++                    done.set_result(None)
++                    return done
++                message.path = self.manager_path
++        return super().send(message)
++
++    async def announce_modem(self, path):
++        # No await between making the complete object visible to
++        # GetManagedObjects and queuing its single InterfacesAdded signal.
++        # Otherwise a client can retain a proxy to a half-initialized object
++        # which a later InterfacesAdded replaces underneath it.
++        interfaces = self.pending_modems.pop(path)
++        properties = {}
++        for interface in interfaces:
++            properties[interface.name] = {}
++            for prop in interface.introspect().properties:
++                if prop.access == PropertyAccess.WRITE:
++                    continue
++                value = getattr(interface, prop.name)
++                if inspect.isawaitable(value):
++                    value = await value
++                properties[interface.name][prop.name] = Variant(prop.signature, value)
++        for interface in interfaces:
++            super().export(path, interface)
++        self.send(Message.new_signal(
++            path=self.manager_path, interface='org.freedesktop.DBus.ObjectManager',
++            member='InterfacesAdded', signature='oa{sa{sv}}',
++            body=[path, properties]))
++
+@@ -26,0 +78 @@ class MMInterface(ServiceInterface):
 +        self.i = 0
-@@ -62,6 +62,0 @@ class MMInterface(ServiceInterface):
+@@ -62,6 +113,0 @@ class MMInterface(ServiceInterface):
 -        for mm_object in self.mm_modem_objects:
 -            self.bus.unexport(mm_object)
 -
 -        self.mm_modem_objects = []
 -        self.mm_modem_intefaces = []
 -
-@@ -82,2 +76,0 @@ class MMInterface(ServiceInterface):
+@@ -82,2 +127,0 @@ class MMInterface(ServiceInterface):
 -        self.i = 0
 -
-@@ -100 +93 @@ class MMInterface(ServiceInterface):
+@@ -100 +144 @@ class MMInterface(ServiceInterface):
 -            self.loop.create_task(self.export_new_modem(path, props))
 +            self.loop.create_task(self.export_new_modem(path, mprops))
-@@ -103,0 +97 @@ class MMInterface(ServiceInterface):
+@@ -103,0 +148 @@ class MMInterface(ServiceInterface):
 +    @async_locked
-@@ -104,0 +99,3 @@ class MMInterface(ServiceInterface):
+@@ -104,0 +150,3 @@ class MMInterface(ServiceInterface):
 +        # ModemAdded can arrive while GetModems is still being exported.
 +        if any(modem.modem_name == path for modem in self.mm_modem_interfaces):
 +            return
-@@ -130,6 +127,7 @@ class MMInterface(ServiceInterface):
+@@ -107,0 +156,5 @@ class MMInterface(ServiceInterface):
++        # GetModems may precede this slot's export by another slot's async
++        # initialization. Subscribe first, then fetch the current state so a
++        # Powered/Interfaces change in that interval cannot be lost.
++        mm_modem_interface.ofono_props.update(
++            await mm_modem_interface.ofono_modem.call_get_properties())
+@@ -108,0 +162 @@ class MMInterface(ServiceInterface):
++        await mm_modem_interface.wait_for_sim_initialization()
+@@ -127,0 +182 @@ class MMInterface(ServiceInterface):
++        await self.bus.announce_modem(self.mm_modem_objects[-1])
+@@ -130,6 +185,7 @@ class MMInterface(ServiceInterface):
 -        for mm_object in self.mm_modem_objects:
 -            try:
 -                if mm_object.modem_name == path:
@@ -48,6 +116,9 @@ index ff7d102..b9fe7e2 100755
 +                    self.bus.unexport(bearer)
 +                self.mm_modem_interfaces.remove(modem)
 +                self.mm_modem_objects.remove(object_path)
+@@ -162 +218 @@ async def main():
+-    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
++    bus = await MMMessageBus(bus_type=BusType.SYSTEM).connect()
 diff --git a/ofono2mm/mm_bearer.py b/ofono2mm/mm_bearer.py
 index 5317226..dab2eb4 100644
 --- a/ofono2mm/mm_bearer.py
@@ -91,80 +162,132 @@ index 5317226..dab2eb4 100644
 +                prefix = ipaddress.IPv4Network('0.0.0.0/' + value.value['Netmask'].value).prefixlen
 +                self.props['Ip4Config'].value['prefix'] = Variant('u', prefix)
 diff --git a/ofono2mm/mm_modem.py b/ofono2mm/mm_modem.py
-index f1b2072..fa396f3 100644
+index f1b2072..db9380b 100644
 --- a/ofono2mm/mm_modem.py
 +++ b/ofono2mm/mm_modem.py
 @@ -37,0 +38 @@ import asyncio
 +import ipaddress
-@@ -59,0 +61 @@ class MMModemInterface(ServiceInterface):
+@@ -59,0 +61,3 @@ class MMModemInterface(ServiceInterface):
 +        self.power_lock = asyncio.Lock()
-@@ -100 +102,4 @@ class MMModemInterface(ServiceInterface):
++        self.sim_refresh_task = None
++        self.sim_ready = asyncio.Event()
+@@ -100 +104,4 @@ class MMModemInterface(ServiceInterface):
 -        for iface in self.ofono_props['Interfaces'].value:
 +        priority = ('org.ofono.SimManager', 'org.ofono.RadioSettings',
 +                    'org.ofono.NetworkRegistration', 'org.ofono.ConnectionManager')
 +        for iface in sorted(self.ofono_props['Interfaces'].value,
 +                            key=lambda name: priority.index(name) if name in priority else len(priority)):
-@@ -103,0 +109,5 @@ class MMModemInterface(ServiceInterface):
+@@ -102,0 +110,18 @@ class MMModemInterface(ServiceInterface):
++    async def wait_for_sim_initialization(self):
++        # oFono initially reports Present=false while the radio reads the SIM.
++        # Publishing that transient failure prevents NetworkManager's initial
++        # radio-enable request. An empty slot is still published after the
++        # bounded probe window, with its real SIM_MISSING result.
++        self.update_sim_ready()
++        try:
++            await asyncio.wait_for(self.sim_ready.wait(), timeout=30)
++        except asyncio.TimeoutError:
++            pass
++        self.ofono_props.update(await self.ofono_modem.call_get_properties())
++        self.set_props()
++
++    def update_sim_ready(self):
++        sim = self.ofono_interface_props.get('org.ofono.SimManager', {})
++        if ('Present' in sim and sim['Present'].value and 'PinRequired' in sim):
++            self.sim_ready.set()
++
+@@ -103,0 +129,10 @@ class MMModemInterface(ServiceInterface):
 +        # These supplementary properties are not consumed by the bridge.
 +        # Querying them triggers slow network requests during modem startup.
 +        if iface in ('org.ofono.CallBarring', 'org.ofono.CallForwarding',
 +                     'org.ofono.CallSettings'):
 +            return
-@@ -142,0 +153 @@ class MMModemInterface(ServiceInterface):
++        if iface in self.ofono_interfaces:
++            return
++        proxy = self.ofono_proxy[iface]
++        if proxy is None:
++            return
+@@ -105 +140 @@ class MMModemInterface(ServiceInterface):
+-            iface: self.ofono_proxy[iface]
++            iface: proxy
+@@ -106,0 +142,6 @@ class MMModemInterface(ServiceInterface):
++        self.ofono_interface_props[iface] = {}
++        # Subscribe before the initial snapshot so late SIM initialization
++        # cannot finish in the gap between GetProperties and subscription.
++        subscribe = getattr(proxy, 'on_property_changed', None)
++        if subscribe is not None:
++            subscribe(self.ofono_interface_changed(iface))
+@@ -118 +158,0 @@ class MMModemInterface(ServiceInterface):
+-            self.ofono_interfaces[iface].on_property_changed(self.ofono_interface_changed(iface))
+@@ -129 +168,0 @@ class MMModemInterface(ServiceInterface):
+-            self.ofono_interfaces[iface].on_property_changed(self.ofono_interface_changed(iface))
+@@ -142,0 +182 @@ class MMModemInterface(ServiceInterface):
 +        self.set_props()
-@@ -269,0 +281,2 @@ class MMModemInterface(ServiceInterface):
+@@ -269,0 +310,2 @@ class MMModemInterface(ServiceInterface):
 +                        "address": Variant('s', ip_address),
 +                        "prefix": Variant('u', ipaddress.IPv4Network('0.0.0.0/' + ctx[1]['Settings'].value.get('Netmask', Variant('s', '255.255.255.255')).value).prefixlen),
-@@ -281 +294 @@ class MMModemInterface(ServiceInterface):
+@@ -281 +323 @@ class MMModemInterface(ServiceInterface):
 -                    self.props['Ports'].value.append([ctx[1]['Settings'].value['Interface'].value, ModemManagerPortType.AT])
 +                    self.props['Ports'].value.append([ctx[1]['Settings'].value['Interface'].value, ModemManagerPortType.NET])
-@@ -325,0 +339,2 @@ class MMModemInterface(ServiceInterface):
+@@ -325,0 +368,2 @@ class MMModemInterface(ServiceInterface):
 +                    "address": Variant('s', ip_address),
 +                    "prefix": Variant('u', ipaddress.IPv4Network('0.0.0.0/' + properties['Settings'].value.get('Netmask', Variant('s', '255.255.255.255')).value).prefixlen),
-@@ -353 +368 @@ class MMModemInterface(ServiceInterface):
+@@ -353 +397 @@ class MMModemInterface(ServiceInterface):
 -        if not self.ofono_props['Powered'].value or 'org.ofono.SimManager' not in self.ofono_interface_props:
 +        if not self.ofono_props['Powered'].value:
-@@ -362,0 +378,5 @@ class MMModemInterface(ServiceInterface):
+@@ -362,0 +407,5 @@ class MMModemInterface(ServiceInterface):
 +        if 'org.ofono.SimManager' not in self.ofono_interface_props:
 +            self.props['State'] = Variant('i', ModemManagerState.INITIALIZING)
 +            self.props['UnlockRequired'] = Variant('u', ModemManagerLock.UNKNOWN)
 +            return
 +
-@@ -364,0 +385,4 @@ class MMModemInterface(ServiceInterface):
+@@ -364,0 +414,4 @@ class MMModemInterface(ServiceInterface):
 +            if 'Present' not in self.ofono_interface_props['org.ofono.SimManager']:
 +                self.props['State'] = Variant('i', ModemManagerState.INITIALIZING)
 +                self.props['UnlockRequired'] = Variant('u', ModemManagerLock.UNKNOWN)
 +                return
-@@ -375,0 +400,5 @@ class MMModemInterface(ServiceInterface):
+@@ -375,0 +429,5 @@ class MMModemInterface(ServiceInterface):
 +        if 'PinRequired' not in self.ofono_interface_props['org.ofono.SimManager']:
 +            self.props['State'] = Variant('i', ModemManagerState.INITIALIZING)
 +            self.props['UnlockRequired'] = Variant('u', ModemManagerLock.UNKNOWN)
 +            return
 +
-@@ -574,2 +603 @@ class MMModemInterface(ServiceInterface):
+@@ -505,0 +564 @@ class MMModemInterface(ServiceInterface):
++        self.update_sim_ready()
+@@ -525,3 +583,0 @@ class MMModemInterface(ServiceInterface):
+-        if old_state != self.props['State'].value:
+-            self.StateChanged(old_state, self.props['State'].value, 1)
+-
+@@ -533,0 +590,5 @@ class MMModemInterface(ServiceInterface):
++        # NetworkManager handles StateChanged by reading libmm-glib's cached
++        # State. Update that cache first, otherwise initial registration leaves
++        # automatic APN selection waiting for a second registration event.
++        if old_state != self.props['State'].value:
++            self.StateChanged(old_state, self.props['State'].value, 1)
+@@ -574,2 +635 @@ class MMModemInterface(ServiceInterface):
 -        if self.props['State'].value == -1:
 -            return
 +        await self.set_enabled(enable)
-@@ -577 +605,4 @@ class MMModemInterface(ServiceInterface):
+@@ -577 +637,4 @@ class MMModemInterface(ServiceInterface):
 -        try:
 +    async def set_enabled(self, enable):
 +        async with self.power_lock:
 +            if enable and not self.ofono_props['Powered'].value:
 +                await self.ofono_modem.call_set_property('Powered', Variant('b', True))
-@@ -579,4 +610,2 @@ class MMModemInterface(ServiceInterface):
+@@ -579,4 +642,2 @@ class MMModemInterface(ServiceInterface):
 -        except Exception as e:
 -            pass
 -
 -        self.set_props()
 +            self.ofono_props.update(await self.ofono_modem.call_get_properties())
 +            self.set_props()
-@@ -651 +680,4 @@ class MMModemInterface(ServiceInterface):
+@@ -651 +712,4 @@ class MMModemInterface(ServiceInterface):
 -        try:
 +        if state not in (1, 2, 3):
 +            raise DBusError('org.freedesktop.ModemManager1.Error.Core.InvalidArgs',
 +                            'Invalid modem power state')
 +        async with self.power_lock:
-@@ -653,14 +685 @@ class MMModemInterface(ServiceInterface):
+@@ -653,14 +717 @@ class MMModemInterface(ServiceInterface):
 -        except Exception as e:
 -            pass
 -
@@ -180,10 +303,17 @@ index f1b2072..fa396f3 100644
 -                pass
 -
 +            self.ofono_props.update(await self.ofono_modem.call_get_properties())
-@@ -874,0 +894,2 @@ class MMModemInterface(ServiceInterface):
-+                if iface == 'org.ofono.SimManager' and name in ('Present', 'PinRequired'):
-+                    self.loop.create_task(self.refresh_ofono_interface(iface))
-@@ -877,0 +899,18 @@ class MMModemInterface(ServiceInterface):
+@@ -870 +920,0 @@ class MMModemInterface(ServiceInterface):
+-                self.set_props()
+@@ -874,0 +925,7 @@ class MMModemInterface(ServiceInterface):
++                self.set_props()
++                if iface == 'org.ofono.SimManager' and (
++                        name in ('Present', 'PinRequired') or
++                        'PinRequired' not in self.ofono_interface_props[iface]):
++                    if self.sim_refresh_task is None or self.sim_refresh_task.done():
++                        self.sim_refresh_task = self.loop.create_task(
++                            self.refresh_ofono_interface(iface))
+@@ -877,0 +935,18 @@ class MMModemInterface(ServiceInterface):
 +    async def refresh_ofono_interface(self, iface):
 +        if iface not in self.ofono_interfaces or iface not in self.ofono_interface_props:
 +            return
@@ -194,13 +324,13 @@ index f1b2072..fa396f3 100644
 +            return
 +
 +        self.ofono_interface_props[iface] = properties
-+        self.set_props()
 +        if self.mm_modem3gpp_interface is not None:
 +            self.mm_modem3gpp_interface.ofono_interface_props = self.ofono_interface_props.copy()
 +            self.mm_modem3gpp_interface.set_props()
 +        if self.mm_sim_interface is not None:
 +            self.mm_sim_interface.ofono_interface_props = self.ofono_interface_props.copy()
 +            self.mm_sim_interface.set_props()
++        self.set_props()
 +
 diff --git a/ofono2mm/mm_modem_3gpp.py b/ofono2mm/mm_modem_3gpp.py
 index 999917e..4b97cb9 100644

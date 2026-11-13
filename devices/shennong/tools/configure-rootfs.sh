@@ -5,7 +5,7 @@ dpkg -i /var/cache/shennong-adaptation/*.deb
 apt-get check
 sed -i 's/^# *\(zh_CN.UTF-8 UTF-8\)/\1/' /etc/locale.gen
 locale-gen zh_CN.UTF-8
-update-locale LANG=zh_CN.UTF-8
+update-locale LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh
 ln -sfn /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 printf '%s\n' Asia/Shanghai > /etc/timezone
 mkdir -p /etc/droidian

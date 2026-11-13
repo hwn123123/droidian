@@ -21,6 +21,9 @@ chmod +x "$work/source/debian/rules"
 )
 overlay="$out/rootfs-overlay/var/cache/shennong-adaptation"
 mkdir -p "$overlay"
+# Stage only this build's packages; mixed versions break the exact dependency.
+rm -f "$overlay"/adaptation-xiaomi-shennong_*.deb \
+    "$overlay"/adaptation-xiaomi-shennong-configs_*.deb
 cp "$work/"*.deb "$overlay/"
 cd "$repo"
 debos --disable-fakemachine --artifactdir="$out" devices/shennong/rootfs.yaml

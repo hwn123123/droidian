@@ -87,6 +87,9 @@ This exports a tar archive, not a generic flashable zip. It installs the
 packaged HWCOMPOSER configuration, defaults to Simplified Chinese and the
 Asia/Shanghai timezone, and creates `droidian` with password `123`. Locale
 preferences remain changeable through the desktop's own settings.
+The system locale is `zh_CN.UTF-8`, with `LANGUAGE=zh_CN:zh` for translated
+applications. These are image defaults in `/etc/default/locale`; there is no
+login or boot task forcing the language/timezone back after a user changes it.
 
 Build the pinned 6.1.138 source with the captured stock config:
 
@@ -135,6 +138,11 @@ Image preparation expands the distribution's private `android-rootfs.img` to
 creating `.lxc_keep` and stops both display and USB. This is a sparse file
 inside the dedicated Linux root, with no change to the device partition layout.
 LXC startup errors use its native syslog option and the bounded system journal.
+Droidian's existing `droidian_boot_completed.service` calls the distribution's
+`android_bootctl mark-boot-successful` after the desktop starts. This commits
+the current slot through BootControl; without it, repeated normal B boots
+exhaust the bootloader's retry counter and fall back to slot A. No extra
+boot-monitor process or independent slot-control implementation is installed.
 Image preparation also builds `compat/binder-no-secctx.c` against the image's
 own Bionic runtime and installs its output in the private vendor overlay.
 `install-binder-compat.sh` mounts that Android image read-only for the build;
@@ -182,7 +190,7 @@ The helper pins upstream commit `9b9e8bd2ffc8a6ba482d6daf7171fd84ba82c3b8`,
 runs its tests and builds a `+shennong2` Debian package. Also run
 `sudo bash devices/shennong/tools/build-ofono2mm.sh` to package the isolated
 address-prefix, network-port and late SIM-property refresh fixes against the pinned
-upstream modem bridge. It produces a `+shennong7` package. Device image preparation
+upstream modem bridge. It produces a `+shennong15` package. Device image preparation
 requires both packages.
 For a rebuild with inputs already cached, set `SHENNONG_OFFLINE=1`; the helper
 still verifies the archive signature and all cached package hashes.
@@ -205,6 +213,20 @@ The bridge implements the normal Simple.Connect enable step, propagates errors
 and bounds registration waits. It serializes modem power changes, and reports
 the actual oFono state. NetworkManager handles reconnection; the bearer has no
 separate retry loop or background reconnect after an explicit disconnect.
+Modem and SIM subscriptions are installed before reading their initial state.
+Each late slot refreshes the earlier `GetModems` snapshot and publishes one
+complete modem object on the manager's ObjectManager path, so NetworkManager
+can discover it even after the first slot has acquired the bus name. This is
+implemented inside the existing bridge; SIM/bearer object paths and the
+NetworkManager service remain unchanged.
+The bridge emits property updates before `StateChanged`, and refreshes the
+3GPP/SIM properties before announcing a modem-state transition. NetworkManager
+uses libmm-glib's cached state and operator code in that callback; sending the
+transition first leaves native automatic APN selection waiting indefinitely.
+Before its first publication, each slot waits for the SIM's present/PIN result
+for up to 30 seconds. This prevents a transient SIM_MISSING state from skipping
+NetworkManager's first radio-enable request. Empty slots retain their actual
+SIM_MISSING result when that bounded initialization window ends.
 The unused direct-oFono pseudo devices remain strictly unmanaged, including
 when the desktop's global mobile-data switch changes.
 
@@ -328,8 +350,21 @@ the bridge's autonomous reconnect. A later package also serializes radio power
 operations. Reboot logs exposed a separate failure: LXC could not create
 `.lxc_keep` because the minimized Android root image had no free inodes.
 Offline ext4 expansion restored approximately 5,000 free inodes; new image
-builds reserve this space automatically. The subsequent ordinary boot still
-needs its logs checked before claiming automatic recovery after reboot.
+builds reserve this space automatically. Subsequent ordinary boots restored
+USB and Phosh automatically. The final bridge also passed a boot starting
+from powered-off radios: NetworkManager selected the provider's APN, activated
+the actual RMNET interface with its reported `/29` prefix, and fetched HTTP
+200/204 pages. A bounded initial SIM probe, atomic modem publication, and
+property-before-state notifications fix the separate cold-start races.
+
+The isolated ObjectManager regression can be run against the installed bridge:
+
+```sh
+dbus-run-session -- python3 devices/shennong/tests/test_modem_publication.py /usr/lib/ofono2mm
+```
+
+It checks that incomplete objects stay out of snapshots and exactly one
+complete announcement is emitted, including asynchronous properties.
 
 This remains a development port. These cellular checks cover the inserted SIM
 and IPv4 data. Dual-SIM data switching, IPv6, calls/IMS, messaging, Wi-Fi, audio,

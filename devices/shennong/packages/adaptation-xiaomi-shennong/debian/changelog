@@ -1,3 +1,9 @@
+adaptation-xiaomi-shennong (0.1.8) unstable; urgency=medium
+
+  * Mark the running slot successful from Droidian's native boot-complete unit.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Fri, 13 Nov 2026 18:40:00 +0800
+
 adaptation-xiaomi-shennong (0.1.7) unstable; urgency=medium
 
   * Report LXC daemon startup errors in the bounded system journal.
