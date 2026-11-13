@@ -21,6 +21,8 @@
     "libwlroots12a",
     "phoc",
     "lxc-android",
-    "linux-initramfs-halium-generic"
+    "linux-initramfs-halium-generic",
+    "ofono-binder-plugin",
+    "ofono2mm"
   ]
 }

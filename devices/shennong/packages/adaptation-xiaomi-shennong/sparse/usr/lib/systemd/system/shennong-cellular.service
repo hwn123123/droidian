@@ -1,0 +1,11 @@
+[Unit]
+Description=Stock Qualcomm cellular data transport
+Requires=shennong-vendor.service
+After=shennong-vendor.service
+Before=lxc@android.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/shennong-cellular
+RemainAfterExit=yes
+TimeoutStartSec=45

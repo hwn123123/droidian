@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# The early display profile defers firmware consumers until vendor is mounted.
+set -eu
+for library in libcom.android.tethering.connectivity_native.so libc++.so \
+    libshennong-nicm-linux.so; do
+    [ -s "/vendor/lib64/shennong-cellular/$library" ] || {
+        echo "Missing stock NICM runtime dependency: $library" >&2
+        exit 1
+    }
+done
+# Older display-only boots let an Android init write create a placeholder.
+# Never replace a real kernel character device.
+if [ -f /dev/ipa ] && [ ! -c /dev/ipa ]; then rm /dev/ipa; fi
+for module in ipam rmnet_core rmnet_ctl ipanetm tipc; do
+    modprobe "$module"
+done
+count=0
+# RMNET becomes ready after Android's Radio services power the modem. Waiting
+# for it here could block the Radio services that finish its initialization.
+until [ -c /dev/ipa ]; do
+    count=$((count + 1))
+    [ "$count" -lt 30 ] || { echo 'IPA data transport did not become ready' >&2; exit 1; }
+    sleep 1
+done
+echo 'Stock IPA/RMNET drivers loaded; Radio will initialize the modem link'

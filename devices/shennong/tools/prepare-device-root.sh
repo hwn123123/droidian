@@ -45,6 +45,23 @@ chroot "$root" /bin/sh -c 'dpkg --force-confnew -i /var/cache/shennong-adaptatio
 rm -r "$root/var/cache/shennong-adaptation"
 bash "$here/install-binder-compat.sh" "$root"
 bash "$here/install-usb-framework.sh" "$root"
+bash "$here/install-cellular-runtime.sh" "$root"
+radio_packages=("$repo/out/shennong/telephony-packages/"ofono-binder-plugin_*+shennong2_arm64.deb)
+[ "${#radio_packages[@]}" = 1 ] && [ -s "${radio_packages[0]}" ] || {
+    echo 'Build the device AIDL plugin with tools/build-ofono-plugin.sh first.' >&2
+    exit 1
+}
+install -m644 "${radio_packages[0]}" "$root/tmp/shennong-ofono.deb"
+chroot "$root" dpkg -i /tmp/shennong-ofono.deb
+rm "$root/tmp/shennong-ofono.deb"
+bridge_packages=("$repo/out/shennong/telephony-packages/"ofono2mm_*+shennong2_all.deb)
+[ "${#bridge_packages[@]}" = 1 ] && [ -s "${bridge_packages[0]}" ] || {
+    echo 'Build the device modem bridge with tools/build-ofono2mm.sh first.' >&2
+    exit 1
+}
+install -m644 "${bridge_packages[0]}" "$root/tmp/shennong-ofono2mm.deb"
+chroot "$root" dpkg -i /tmp/shennong-ofono2mm.deb
+rm "$root/tmp/shennong-ofono2mm.deb"
 
 uid=$(awk -F: '$1=="droidian"{print $3}' "$root/etc/passwd")
 gid=$(awk -F: '$1=="droidian"{print $4}' "$root/etc/passwd")

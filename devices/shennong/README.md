@@ -139,6 +139,55 @@ the captured Android system's Binder NDK library. On an arm64 Linux builder,
 native Clang uses the NDK sysroot, CRT and runtime libraries; no x86 compiler
 execution is required. Pass the NDK variable through `sudo` explicitly.
 
+The cellular transport additionally needs the stock tethering APEX's arm64
+connectivity, DNS helper and C++ libraries. Stage these saved local inputs
+before preparing the device image:
+
+```sh
+python3 devices/shennong/tools/stage-cellular-runtime.py \
+  --source-lib64 /path/to/saved/stock/apex/com.android.tethering/lib64 \
+  --output out/shennong/private-cellular
+```
+
+These binaries and their checksum manifest stay outside Git. The image
+installer verifies them and builds `compat/nicm-linux.c` from source. Only
+the stock `nicmd` service loads this adapter, which selects Qualcomm's
+existing Linux routing path; NetworkManager owns addresses and routing.
+IPA/RMNET and TIPC are loaded on the host before the Android container.
+The container shares the host network namespace so Radio and NICM can use
+the same modem transport and data interfaces. It retains its PID/mount
+namespaces. Volatile property files are recreated on container-only restarts;
+persistent Android properties and user data remain in the dedicated root.
+
+The pinned Droidian AIDL plugin sends an empty traffic descriptor in its
+unpatched data-call request. The isolated patch in
+`patches/ofono-binder-plugin/` supplies the selected APN as DNN and calculates
+the parcelable size, following Android's DataProfileManager. Ordinary APN
+requests also permit the default URSP rule, as Android DataNetwork does.
+Build it in an arm64 Droidian build root with `build-essential`, `pkg-config`,
+`libglib2.0-dev`, `libgbinder-dev`, `libgbinder-radio-dev`, `ofono-dev` and
+`libglibutil-dev` installed:
+
+```sh
+sudo bash devices/shennong/tools/build-ofono-plugin.sh /path/to/droidian-build-root
+```
+
+The helper pins upstream commit `9b9e8bd2ffc8a6ba482d6daf7171fd84ba82c3b8`,
+runs its tests and builds a `+shennong2` Debian package. Also run
+`sudo bash devices/shennong/tools/build-ofono2mm.sh` to package the isolated
+address-prefix, network-port and asynchronous SIM-initialization fixes against the pinned
+upstream modem bridge. Device image preparation requires both packages.
+Changes to the upstream plugin are kept as a separate patch; the stock
+Android Radio binaries and modem firmware are used unchanged. Both SIM slots use stable AIDL on `/dev/binder`.
+The first initialized SIM is selected once through oFono's own default;
+subsequent SIM and APN choices remain under the desktop's normal controls.
+UPower retains its upstream service credentials and sandbox, with only
+`PrivateUsers` disabled because this stock-compatible kernel has no user
+namespaces.
+The packaged ModemManager bridge explicitly starts after oFono. Its upstream
+unit required oFono but did not order startup, allowing the bridge to enumerate
+the radio before the SIM interface was ready.
+
 USB defaults to NCM shared networking at `192.168.66.1/24`. Its fixed local
 SSH address and NetworkManager's shared-mode DHCP/DNS/NAT are enabled without
 testing cellular registration, dial state or Internet reachability. Connecting
@@ -184,9 +233,9 @@ under REC's Android SELinux policy.
 
 The dedicated Linux root and B boot images were installed through REC. All
 preserved partition hashes and both GPT-sector captures matched afterwards.
-Droidian booted with working USB NCM/SSH, Synaptics input, the stock ADSP
-battery channel and the Adreno GPU device. This does not yet establish that
-the camera, cellular, Wi-Fi or accelerated desktop work.
+Droidian initially booted with working USB NCM/SSH, Synaptics input, the stock
+ADSP battery channel and the Adreno GPU device. Display and cellular results
+from the later integration are recorded below.
 
 The first container attempt exposed an important root-handoff issue: a host
 chroot alone left the mount namespace rooted in initramfs. Android APEX's
@@ -198,8 +247,9 @@ APEX rejected duplicate versioned mounts. The container configuration now
 inherits the dedicated root's APEX tree once, omitting the generic second
 `/apex` bind. Real container testing subsequently reached `apexd.status=ready`.
 Linux owns driver loading, system time and the management network; the Android
-container drops the corresponding capabilities and uses a separate network
-namespace for this display milestone. The start helper verifies the required
+container drops the corresponding capabilities. The first display milestone
+used a separate network namespace; cellular integration now shares the host
+network for NICM and RMNET. The start helper verifies the required
 host display/input/ADSP drivers before delivering the vendor's module-ready
 property. This is not validation of every vendor peripheral.
 
@@ -235,5 +285,23 @@ super-mapper teardown. The corrected package was installed without losing
 USB or restarting the desktop. Persistent journal records are bounded to
 64 MiB; hardware errors are not filtered out.
 
-This remains a development port. Wi-Fi, cellular, audio, cameras, charging
-and suspend have not yet passed a complete Droidian hardware validation.
+On 2026-11-13, the AIDL telephony path recognized both slots and the inserted
+SIM, registered on China Mobile NR, and completed a real data call. The stock
+Radio response supplied the IPv4 address, mask, gateway and DNS. NetworkManager
+activated that connection, installed its route and DNS, and the device received
+public ICMP replies, resolved names and fetched an HTTP page over cellular.
+The modem bridge now preserves the real prefix instead of reporting `/0`,
+and reports RMNET interfaces as network ports. Its late-slot event handler
+uses the received properties and serializes exports, avoiding a missed SIM
+when the two slots finish initialization at different times.
+
+The Android application policy service repeatedly added identical firewall
+hooks while waiting for Android framework services. Its stock disable property
+stops this behavior; NICM and the modem data plane stay active. USB sharing
+continues to use NetworkManager's standard DHCP/DNS/NAT independently of data
+registration. The cellular setup is wanted by the Android container, but a
+cellular setup failure does not prevent the USB/display services from starting.
+
+This remains a development port. These cellular checks cover the inserted SIM
+and IPv4 data. Dual-SIM data switching, IPv6, calls/IMS, messaging, Wi-Fi, audio,
+cameras, charging and suspend still need their own hardware validation.

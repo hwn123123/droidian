@@ -1,0 +1,89 @@
+From: Ning <hwn123123@users.noreply.github.com>
+Subject: [PATCH] preserve data-interface addressing in the ModemManager API
+
+Import the real IPv4 address and mask for both active and newly reported
+bearers. Report RMNET interfaces as NET ports and fix the 3GPP DRX key.
+A SIM may be present before its PIN property has arrived; defer that state.
+Serialize late ModemAdded exports so both asynchronously initialized slots
+reach the desktop exactly once. Keep exported devices on a manual rescan.
+
+diff --git a/main.py b/main.py
+index ff7d102..b9fe7e2 100755
+--- a/main.py
++++ b/main.py
+@@ -26,0 +27 @@ class MMInterface(ServiceInterface):
++        self.i = 0
+@@ -62,6 +62,0 @@ class MMInterface(ServiceInterface):
+-        for mm_object in self.mm_modem_objects:
+-            self.bus.unexport(mm_object)
+-
+-        self.mm_modem_objects = []
+-        self.mm_modem_intefaces = []
+-
+@@ -82,2 +76,0 @@ class MMInterface(ServiceInterface):
+-        self.i = 0
+-
+@@ -100 +93 @@ class MMInterface(ServiceInterface):
+-            self.loop.create_task(self.export_new_modem(path, props))
++            self.loop.create_task(self.export_new_modem(path, mprops))
+@@ -103,0 +97 @@ class MMInterface(ServiceInterface):
++    @async_locked
+@@ -104,0 +99,3 @@ class MMInterface(ServiceInterface):
++        # ModemAdded can arrive while GetModems is still being exported.
++        if any(modem.modem_name == path for modem in self.mm_modem_interfaces):
++            return
+@@ -130,6 +127,7 @@ class MMInterface(ServiceInterface):
+-        for mm_object in self.mm_modem_objects:
+-            try:
+-                if mm_object.modem_name == path:
+-                    self.bus.unexport(mm_object)
+-            except Exception as e:
+-                pass
++        for modem, object_path in list(zip(self.mm_modem_interfaces, self.mm_modem_objects)):
++            if modem.modem_name == path:
++                self.bus.unexport(object_path)
++                for bearer in modem.bearers:
++                    self.bus.unexport(bearer)
++                self.mm_modem_interfaces.remove(modem)
++                self.mm_modem_objects.remove(object_path)
+diff --git a/ofono2mm/mm_bearer.py b/ofono2mm/mm_bearer.py
+index 5317226..2ae595d 100644
+--- a/ofono2mm/mm_bearer.py
++++ b/ofono2mm/mm_bearer.py
+@@ -10,0 +11 @@ import asyncio
++import ipaddress
+@@ -234 +235 @@ class MMBearerInterface(ServiceInterface):
+-                    self.mm_modem.props['Ports'].value.append([value.value['Interface'].value, ModemManagerPortType.AT])
++                    self.mm_modem.props['Ports'].value.append([value.value['Interface'].value, ModemManagerPortType.NET])
+@@ -241,0 +243,3 @@ class MMBearerInterface(ServiceInterface):
++            if 'Netmask' in value.value:
++                prefix = ipaddress.IPv4Network('0.0.0.0/' + value.value['Netmask'].value).prefixlen
++                self.props['Ip4Config'].value['prefix'] = Variant('u', prefix)
+diff --git a/ofono2mm/mm_modem.py b/ofono2mm/mm_modem.py
+index f1b2072..3e7186d 100644
+--- a/ofono2mm/mm_modem.py
++++ b/ofono2mm/mm_modem.py
+@@ -37,0 +38 @@ import asyncio
++import ipaddress
+@@ -269,0 +271,2 @@ class MMModemInterface(ServiceInterface):
++                        "address": Variant('s', ip_address),
++                        "prefix": Variant('u', ipaddress.IPv4Network('0.0.0.0/' + ctx[1]['Settings'].value.get('Netmask', Variant('s', '255.255.255.255')).value).prefixlen),
+@@ -281 +284 @@ class MMModemInterface(ServiceInterface):
+-                    self.props['Ports'].value.append([ctx[1]['Settings'].value['Interface'].value, ModemManagerPortType.AT])
++                    self.props['Ports'].value.append([ctx[1]['Settings'].value['Interface'].value, ModemManagerPortType.NET])
+@@ -325,0 +329,2 @@ class MMModemInterface(ServiceInterface):
++                    "address": Variant('s', ip_address),
++                    "prefix": Variant('u', ipaddress.IPv4Network('0.0.0.0/' + properties['Settings'].value.get('Netmask', Variant('s', '255.255.255.255')).value).prefixlen),
+@@ -375,0 +381,5 @@ class MMModemInterface(ServiceInterface):
++        if 'PinRequired' not in self.ofono_interface_props['org.ofono.SimManager']:
++            self.props['State'] = Variant('i', ModemManagerState.INITIALIZING)
++            self.props['UnlockRequired'] = Variant('u', ModemManagerLock.UNKNOWN)
++            return
++
+diff --git a/ofono2mm/mm_modem_3gpp.py b/ofono2mm/mm_modem_3gpp.py
+index 999917e..4b97cb9 100644
+--- a/ofono2mm/mm_modem_3gpp.py
++++ b/ofono2mm/mm_modem_3gpp.py
+@@ -32 +32 @@ class MMModem3gppInterface(ServiceInterface):
+-                'dtx-cycle': Variant('u', 0) # hardcoded value unknown MM_MODEM_3GPP_DRX_CYCLE_UNKNOWN
++                'drx-cycle': Variant('u', 0) # hardcoded value unknown MM_MODEM_3GPP_DRX_CYCLE_UNKNOWN

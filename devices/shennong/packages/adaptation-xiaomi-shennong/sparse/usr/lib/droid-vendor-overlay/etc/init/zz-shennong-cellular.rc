@@ -1,0 +1,12 @@
+# Keep the stock NICM binary and modem protocol, with Linux routing ownership.
+service vendor.nicmd /system/vendor/bin/nicmd
+    override
+    class main
+    setenv LD_LIBRARY_PATH /vendor/lib64/shennong-cellular
+    setenv LD_PRELOAD /vendor/lib64/shennong-cellular/libshennong-nicm-linux.so
+
+# This is Android's application/UID policy manager, separate from NICM's
+# modem data transport. Its framework retries append duplicate firewall hooks
+# without system_server. Use its stock disable property on the Linux host.
+on property:vendor.all.modules.ready=1
+    setprop persist.vendor.dpm.vndr.feature 0

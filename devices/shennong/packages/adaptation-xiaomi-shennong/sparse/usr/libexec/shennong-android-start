@@ -17,6 +17,14 @@ for module in msm_drm msm_kgsl synaptics_tcm2 xiaomi_touch adsp_loader_dlkm; do
     }
 done
 if [ "$(lxc-info -n android -sH 2>/dev/null || true)" != RUNNING ]; then
+    # Android init creates fresh volatile property areas. Reusing the previous
+    # process's files crashes its second stage during a container-only restart.
+    # Keep existing mmaps intact; persistent properties live separately in data.
+    if [ -f /dev/__properties__/property_info ]; then
+        rm -rf /run/shennong-android-properties.previous
+        mv /dev/__properties__ /run/shennong-android-properties.previous
+        mkdir -m 0711 /dev/__properties__
+    fi
     rm -f /var/lib/shennong/android-data/vendor/shennong-usb/framework.ready
     lxc-start -d -n android -f /etc/lxc/shennong-android.conf
 fi

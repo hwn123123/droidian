@@ -1,0 +1,28 @@
+From: Ning <hwn123123@users.noreply.github.com>
+Subject: [PATCH] aidl: match Android APN traffic descriptor and default rule
+
+Use the APN as DNN, size its parcelable after serialization and allow the
+default URSP rule for ordinary APN requests without an OS app id. Qualcomm
+otherwise rejects data setup with MATCH_ALL_RULE_NOT_ALLOWED (2253). This
+follows the Android DataProfileManager and DataNetwork request semantics.
+
+diff --git a/src/binder_data.c b/src/binder_data.c
+index c780c71..3ca4ecc 100644
+--- a/src/binder_data.c
++++ b/src/binder_data.c
+@@ -1697,2 +1697,5 @@ binder_data_call_setup_submit(
+-        gbinder_writer_append_int32(&writer, 3 * sizeof(gint32));
+-        gbinder_writer_append_string16(&writer, NULL); /* trafficDescriptor.dnn */
++        const gint32 descriptor_size = gbinder_writer_bytes_written(&writer);
++        gbinder_writer_append_int32(&writer, -1);
++        /* Match Android DataProfileManager: use this profile's APN as DNN.
++         * A present descriptor with neither DNN nor OS app id is invalid. */
++        gbinder_writer_append_string16(&writer, setup->apn);
+@@ -1699,0 +1703,2 @@ binder_data_call_setup_submit(
++        gbinder_writer_overwrite_int32(&writer, descriptor_size,
++            gbinder_writer_bytes_written(&writer) - descriptor_size);
+@@ -1712 +1717,3 @@ binder_data_call_setup_submit(
+-        gbinder_writer_append_bool(&writer, FALSE); /* matchAllRuleAllowed */
++        /* Ordinary APN data has no OS app id; permit the modem's default
++         * URSP rule, matching Android's non-enterprise data request. */
++        gbinder_writer_append_bool(&writer, TRUE); /* matchAllRuleAllowed */
