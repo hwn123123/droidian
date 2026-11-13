@@ -145,6 +145,30 @@ preserved the selected level, and the owner confirmed visible brightness
 changes. Brightness storage remains with the standard systemd-backlight
 service; there is no independent brightness daemon or periodic writer.
 
+### Wi-Fi hardware handoff
+
+The native `shennong-wifi.service` loads the captured stock
+`qca_cld3_kiwi_v2` module after vendor/ADSP/container initialization and writes
+the existing CNSS `fs_ready` handoff. The supplicant is ordered after this
+hardware stage. NetworkManager and the distribution's wpa_supplicant keep
+ownership of scanning, saved networks, authentication and DHCP; there is no
+independent reconnection loop or parallel Android Wi-Fi controller.
+
+The firmware directory contains links to the original vendor WLAN INI and
+the read-only persist MAC file. The early ramdisk's `/vendor/firmware` mount
+hides the original vendor symlinks, so the links in the native firmware search
+directory are required. The distribution's signed `wireless-regdb` package
+supplies the standard Linux regulatory database. Proprietary configuration
+and calibration contents are not copied into Git. The unused Android Wi-Fi
+HAL is disabled rather than repeatedly failing a request for module-loading
+capabilities that belong to the host.
+
+On 2026-11-14 the owner-confirmed brightness fix survived a power-key off/on
+cycle. Wi-Fi subsequently exposed its station interface and scanned real
+2.4 GHz and 5 GHz access points. Hardware initialization and scanning also
+passed after a fresh boot with adaptation 0.1.10. An actual connection to an
+owner-selected network, Internet access and reconnect remain pending.
+
 Build the pinned 6.1.138 source with the captured stock config:
 
 ```sh

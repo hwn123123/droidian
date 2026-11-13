@@ -111,7 +111,7 @@ for path in "$root/etc/ssh/ssh_host_"*; do [ ! -f "$path" ] || rm "$path"; done
 rm -f "$root/etc/systemd/system/sysinit.target.wants/shennong-usb-network.service"
 systemctl --root="$root" enable shennong-vendor.service shennong-touch.service \
     shennong-adsp.service shennong-graphics.service shennong-usb-network.service \
-    shennong-ssh-hostkeys.service ssh.service phosh.service lxc@android.service
+    shennong-ssh-hostkeys.service shennong-wifi.service ssh.service phosh.service lxc@android.service
 systemctl --root="$root" set-default graphical.target
 chroot "$root" usermod -a -G video,render droidian
 systemctl --root="$root" mask hybris-usb.service mobian-usb-gadget.service \

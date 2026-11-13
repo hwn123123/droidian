@@ -21,6 +21,6 @@ Architecture: all
 Depends: ${misc:Depends}, phosh-config-hwcomposer, bash, dnsmasq-base, iproute2, kmod,
          network-manager, mobile-broadband-provider-info, util-linux, halium-wrappers,
          ofono, ofono-binder-plugin, ofono2mm, fonts-inter, fonts-noto-cjk,
-         papirus-icon-theme
+         papirus-icon-theme, wireless-regdb, wpasupplicant, iw
 Description: Droidian device configuration for Xiaomi 14 Pro
  Provides the HWCOMPOSER display configuration and device identity.

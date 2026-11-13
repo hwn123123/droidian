@@ -1,3 +1,12 @@
+adaptation-xiaomi-shennong (0.1.10) unstable; urgency=medium
+
+  * Initialize the stock WLAN module through systemd before the supplicant.
+  * Expose private vendor WLAN configuration and calibration through native
+    firmware search paths; keep NetworkManager as the connection owner.
+  * Leave the unused Android Wi-Fi HAL disabled to avoid module-loader retries.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 01:00:00 +0800
+
 adaptation-xiaomi-shennong (0.1.9) unstable; urgency=medium
 
   * Add the Tide wallpaper, readable typography and native phone appearance defaults.

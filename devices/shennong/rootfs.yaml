@@ -26,6 +26,9 @@ actions:
       - locales
       - network-manager
       - dnsmasq-base
+      - wireless-regdb
+      - wpasupplicant
+      - iw
       - python3
       - xdg-user-dirs
 

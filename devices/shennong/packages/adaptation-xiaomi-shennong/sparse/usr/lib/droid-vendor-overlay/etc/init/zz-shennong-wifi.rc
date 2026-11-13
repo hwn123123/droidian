@@ -1,0 +1,10 @@
+# The host loads WLAN and NetworkManager owns its nl80211 interfaces.
+# Do not let the unused Android HAL repeatedly request CAP_SYS_MODULE.
+service vendor.wifi_hal_legacy /vendor/bin/hw/android.hardware.wifi-service
+    override
+    class hal
+    user wifi
+    group wifi gps
+    capabilities NET_ADMIN NET_RAW
+    disabled
+    oneshot
