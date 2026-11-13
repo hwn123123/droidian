@@ -182,9 +182,11 @@ passed after a fresh boot with adaptation 0.1.10. The owner subsequently
 connected a network and obtained a DHCP address. With the native host data
 path, radio off/on completed a real idle shutdown and automatically rejoined
 the saved network in about six seconds, with zero driver-busy errors. DHCP
-and a source-bound HTTP request over Wi-Fi were verified. The selected
-network redirects HTTP to a captive portal and refuses HTTPS before its
-web authentication; unrestricted Internet access remains pending that login.
+and a source-bound HTTP request over Wi-Fi were verified. The first selected
+network required captive-portal authentication. After the owner changed to
+another network, source-bound HTTPS requests to both `www.baidu.com` and
+`www.debian.org` returned HTTP 200 over the Wi-Fi address. Internet access
+is verified on that network.
 
 Build the pinned 6.1.138 source with the captured stock config:
 
