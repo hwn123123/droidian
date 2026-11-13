@@ -129,6 +129,12 @@ sudo bash devices/shennong/tools/build-device-image.sh \
 The result has the existing 200 GiB ext4 geometry. The Debian adaptation
 package owns hardware setup, mount ordering and the USB management link;
 desktop settings remain under Phosh. No Android userdata mount is used.
+Image preparation expands the distribution's private `android-rootfs.img` to
+2 GiB using the native ext4 tools while it is unmounted. The distributed
+432 MiB filesystem has only 1,664 inodes; exhausting them prevents LXC from
+creating `.lxc_keep` and stops both display and USB. This is a sparse file
+inside the dedicated Linux root, with no change to the device partition layout.
+LXC startup errors use its native syslog option and the bounded system journal.
 Image preparation also builds `compat/binder-no-secctx.c` against the image's
 own Bionic runtime and installs its output in the private vendor overlay.
 `install-binder-compat.sh` mounts that Android image read-only for the build;
@@ -319,9 +325,11 @@ cellular setup failure does not prevent the USB/display services from starting.
 The native automatic APN profile completed a real IPv4 connection in the live
 upgrade tests, and an explicit disconnect remained disconnected after removing
 the bridge's autonomous reconnect. A later package also serializes radio power
-operations. Post-upgrade reboot validation remains open: the latest ordinary
-reboot has not re-enumerated USB on the Mac, so startup logs are still needed
-before claiming automatic recovery after reboot.
+operations. Reboot logs exposed a separate failure: LXC could not create
+`.lxc_keep` because the minimized Android root image had no free inodes.
+Offline ext4 expansion restored approximately 5,000 free inodes; new image
+builds reserve this space automatically. The subsequent ordinary boot still
+needs its logs checked before claiming automatic recovery after reboot.
 
 This remains a development port. These cellular checks cover the inserted SIM
 and IPv4 data. Dual-SIM data switching, IPv6, calls/IMS, messaging, Wi-Fi, audio,

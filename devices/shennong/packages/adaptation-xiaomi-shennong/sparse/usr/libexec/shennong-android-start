@@ -26,7 +26,9 @@ if [ "$(lxc-info -n android -sH 2>/dev/null || true)" != RUNNING ]; then
         mkdir -m 0711 /dev/__properties__
     fi
     rm -f /var/lib/shennong/android-data/vendor/shennong-usb/framework.ready
-    lxc-start -d -n android -f /etc/lxc/shennong-android.conf
+    # The LXC config sends daemon errors to syslog/the bounded system journal.
+    lxc-start -d -n android -f /etc/lxc/shennong-android.conf \
+        --logpriority ERROR
 fi
 for ((attempt=0; attempt<30; attempt++)); do
     if timeout 2 lxc-attach -n android -- /system/bin/setprop vendor.all.modules.ready 1; then

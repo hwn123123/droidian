@@ -8,6 +8,31 @@ root=$(realpath "$1")
 key=$(realpath "$2")
 [[ $root != / && -s $key && -f $root/etc/droidian/shennong-build ]]
 grep -qx 'device=shennong' "$root/etc/droidian/shennong-build"
+
+# The upstream Android image is minimized for distribution (1,664 inodes).
+# Android init and LXC need writable mountpoints and .lxc_keep on each boot.
+# Grow the private image offline; this does not resize a phone partition.
+android_image="$root/var/lib/lxc/android/android-rootfs.img"
+android_size=$((2 * 1024 * 1024 * 1024))
+[[ -f $android_image ]]
+android_fs_size=$(LC_ALL=C tune2fs -l "$android_image" | awk '
+    /^Block count:/ { count=$3 }
+    /^Block size:/ { size=$3 }
+    END { printf "%.0f", count * size }')
+[[ $android_fs_size =~ ^[0-9]+$ && $android_fs_size -gt 0 ]]
+if [[ $android_fs_size -lt $android_size ]]; then
+    [[ -z $(losetup -j "$android_image") ]] || {
+        echo 'Unmount the private Android root image before preparing it.' >&2
+        exit 1
+    }
+    fsck_result=0
+    e2fsck -f -p "$android_image" || fsck_result=$?
+    [[ $fsck_result -le 1 ]] || exit "$fsck_result"
+    if [[ $(stat -c %s "$android_image") -lt $android_size ]]; then
+        truncate -s "$android_size" "$android_image"
+    fi
+    resize2fs "$android_image"
+fi
 rm -f "$root/etc/apt/apt.conf.d/99-shennong-build-proxy"
 build="$repo/out/shennong/kernel-display-build"
 private="$repo/out/shennong/private-vendor"
