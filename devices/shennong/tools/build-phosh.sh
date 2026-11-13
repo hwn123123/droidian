@@ -6,7 +6,7 @@ repo=$(cd "$here/../../.." && pwd)
 out=${SHENNONG_UI_OUT:-$repo/out/shennong/ui-packages}
 cache=${SHENNONG_UI_CACHE:-$repo/out/shennong/ui-source-cache}
 revision=bee1861911b0cf75f50ab00cea5a84ed98d9c32f
-version=0.55.0+git20260824233009.bee1861.next.phosh.0.55+shennong3
+version=0.55.0+git20260824233009.bee1861.next.phosh.0.55+shennong4
 [[ $(dpkg --print-architecture) == arm64 ]]
 mkdir -p "$cache" "$out"
 work=$(mktemp -d)
@@ -29,7 +29,9 @@ archive_source gvc https://github.com/droidian/libgnome-volume-control.git \
     40aea7b7d3c00a801c8d72320d33203163c3ba0f "$work/source/subprojects/gvc"
 archive_source libcall-ui https://gitlab.gnome.org/World/Phosh/libcall-ui.git \
     7389b4ae90e101620ef8e790e76a98e434bd920c "$work/source/subprojects/libcall-ui"
-patch -d "$work/source" -p1 < "$here/../patches/phosh/0001-native-phone-home.patch"
+for change in "$here/../patches/phosh/"*.patch; do
+    patch -d "$work/source" -p1 < "$change"
+done
 {
     printf 'phosh (%s) unstable; urgency=medium\n\n' "$version"
     printf '  * Add native home, fixed favorites dock and touch app ordering.\n\n'

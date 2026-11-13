@@ -95,7 +95,7 @@ login or boot task forcing the language/timezone back after a user changes it.
 
 The phone home is an isolated patch against Droidian Phosh revision
 `bee1861911b0cf75f50ab00cea5a84ed98d9c32f`, not a second launcher or a startup
-script. Its Debian version is the upstream version plus `+shennong3`.
+script. Its Debian version is the upstream version plus `+shennong4`.
 Build it inside a matching arm64 Droidian `next` build environment:
 
 ```sh
@@ -128,6 +128,22 @@ Inter text with the distribution's Noto Chinese fallback and the Tide wallpaper.
 They are defaults: later changes in Phosh/GNOME settings take precedence and
 are not reset at login or boot. Wallpaper provenance and its generation prompt
 are included alongside the asset in the adaptation package.
+
+### Panel brightness
+
+For the primary `HWCOMPOSER-1` output, Phosh first tries its existing Linux
+sysfs/logind backlight backend. The stock Lights AIDL service advertises a
+backlight and accepts updates without driving this panel; previously the
+slider changed only libdroid's saved value. The native backend uses the
+kernel's real range and Phosh's normal brightness curve, with logind handling
+permissions. Android remains the fallback when no native backlight exists.
+Backend failures propagate instead of being reported as successful updates.
+
+On 2026-11-14, changing the actual quick-settings slider produced increasing
+kernel levels across the range, up to 4095. A real power-key off/on cycle
+preserved the selected level, and the owner confirmed visible brightness
+changes. Brightness storage remains with the standard systemd-backlight
+service; there is no independent brightness daemon or periodic writer.
 
 Build the pinned 6.1.138 source with the captured stock config:
 
