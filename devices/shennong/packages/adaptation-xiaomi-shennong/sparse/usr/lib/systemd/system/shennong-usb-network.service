@@ -1,8 +1,7 @@
 [Unit]
 Description=Xiaomi 14 Pro USB network and SSH management link
-DefaultDependencies=no
-After=systemd-remount-fs.service sys-kernel-config.mount
-Before=systemd-udev-trigger.service sysinit.target NetworkManager.service ssh.service
+Requires=lxc@android.service
+After=lxc@android.service sys-kernel-config.mount NetworkManager.service
 Wants=sys-kernel-config.mount
 
 [Service]
@@ -11,4 +10,4 @@ ExecStart=/usr/libexec/shennong-usb-network
 RemainAfterExit=yes
 
 [Install]
-WantedBy=sysinit.target
+WantedBy=multi-user.target

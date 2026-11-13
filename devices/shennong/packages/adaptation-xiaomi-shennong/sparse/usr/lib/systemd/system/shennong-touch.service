@@ -1,6 +1,6 @@
 [Unit]
 Description=Stock Synaptics touch compatibility
-After=shennong-vendor.service shennong-usb-network.service
+After=shennong-vendor.service
 Before=display-manager.service
 Before=shennong-adsp.service
 

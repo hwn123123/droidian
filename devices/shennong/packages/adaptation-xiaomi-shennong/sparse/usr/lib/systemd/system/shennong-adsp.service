@@ -1,6 +1,6 @@
 [Unit]
 Description=Stock Qualcomm ADSP and battery/Type-C channel
-After=shennong-vendor.service shennong-usb-network.service
+After=shennong-vendor.service
 
 [Service]
 Type=oneshot

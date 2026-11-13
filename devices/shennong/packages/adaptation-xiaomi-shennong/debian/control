@@ -18,6 +18,7 @@ Description: Droidian hardware adaptation for Xiaomi 14 Pro
 
 Package: adaptation-xiaomi-shennong-configs
 Architecture: all
-Depends: ${misc:Depends}, phosh-config-hwcomposer, bash, dnsmasq-base, iproute2, kmod
+Depends: ${misc:Depends}, phosh-config-hwcomposer, bash, dnsmasq-base, iproute2, kmod,
+         network-manager, util-linux
 Description: Droidian device configuration for Xiaomi 14 Pro
  Provides the HWCOMPOSER display configuration and device identity.

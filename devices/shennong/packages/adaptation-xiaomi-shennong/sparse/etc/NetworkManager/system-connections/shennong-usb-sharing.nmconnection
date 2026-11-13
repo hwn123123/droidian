@@ -1,0 +1,17 @@
+[connection]
+id=shennong-usb-sharing
+uuid=2968be2e-e294-444b-b400-72aaabd72be3
+type=ethernet
+interface-name=usb0
+autoconnect=true
+
+[ethernet]
+cloned-mac-address=permanent
+
+[ipv4]
+method=shared
+address1=192.168.66.1/24
+never-default=true
+
+[ipv6]
+method=disabled

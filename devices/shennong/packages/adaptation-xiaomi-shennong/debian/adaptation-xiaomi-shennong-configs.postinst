@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    # USB data now starts after the stock IUsb callback, outside sysinit.
+    rm -f /etc/systemd/system/sysinit.target.wants/shennong-usb-network.service
+    rm -f /etc/NetworkManager/conf.d/99-shennong-usb0-unmanaged.conf
+    rm -f /etc/NetworkManager/system-connections/shennong-usb-sharing.nmconnection.dpkg-old
+    # Remove only the unpublished bring-up MTP overrides, not upstream units.
+    rm -f /etc/systemd/system/mtp-configfs@.service.d/50-shennong.conf
+    rm -f /etc/systemd/user/mtp-server.service.d/50-shennong.conf
+    rm -f /usr/lib/droidian/device/mtp-supported /usr/libexec/shennong-mtp
+    chmod 600 /etc/NetworkManager/system-connections/shennong-usb-sharing.nmconnection
+fi
+#DEBHELPER#

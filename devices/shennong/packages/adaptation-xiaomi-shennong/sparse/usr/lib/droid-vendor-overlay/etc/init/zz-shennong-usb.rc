@@ -1,0 +1,13 @@
+# The original port HAL handles Type-C and DWC3 bus events. Linux owns the
+# ConfigFS composition; never start a second gadget owner in Android.
+service vendor.usbgadget-hal /vendor/bin/hw/android.hardware.usb.gadget-service.qti
+    override
+    disabled
+    class hal
+    user system
+    group system mtp usb
+
+service vendor.shennong-usb-framework /system/bin/shennong-usb-framework
+    class hal
+    user system
+    group system mtp usb

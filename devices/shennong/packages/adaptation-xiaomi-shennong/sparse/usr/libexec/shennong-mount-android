@@ -67,6 +67,7 @@ mount_android() {
     fi
     for name in vendor odm vendor_dlkm system_dlkm; do bind_tree "/$name" "$container/$name"; done
     bind_tree /var/lib/shennong/android-data "$container/data"
+    install -d -m 0750 -o 1000 -g 1000 /var/lib/shennong/android-data/vendor/shennong-usb
     bind_tree "$container" /android
     [ -L /data ] || { [ ! -e /data ]; ln -s /android/data /data; }
     mkdir -p /apex

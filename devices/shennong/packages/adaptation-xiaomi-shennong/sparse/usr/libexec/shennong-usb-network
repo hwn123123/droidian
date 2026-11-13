@@ -1,109 +1,71 @@
 #!/bin/sh
-
+# SPDX-License-Identifier: GPL-2.0-only
+# The stock IUsb HAL owns Type-C events. Linux owns NCM and shared networking.
 set -eu
+exec >>/var/log/shennong-usb-network.log 2>&1
+exec 9>/run/lock/shennong-usb.lock
+flock -x -w 30 9
 
 gadget=/sys/kernel/config/usb_gadget/shennong-droidian
-function_name=ncm.usb0
-address=172.31.14.1/24
+address=192.168.66.1/24
+log() { printf 'shennong-usb-network: %s\n' "$*"; }
 
-exec >>/var/log/shennong-usb-network.log 2>&1
-
-log() {
-    printf 'shennong-usb-network: %s\n' "$*"
-}
-
-# Match the working recovery's vendor mode control before binding a gadget.
-# The generic role switch alone can report device before DWC3 is instantiated.
-mode=/sys/bus/platform/devices/a600000.ssusb/mode
-role=/sys/class/usb_role/a600000.ssusb-role-switch/role
-if [ -w "$mode" ]; then
-    current_mode=$(cat "$mode")
-    if [ "$current_mode" != peripheral ] || [ ! -e /sys/class/udc/a600000.dwc3 ]; then
-        printf 'peripheral\n' > "$mode"
-    fi
-    log "USB vendor mode: $(cat "$mode")"
-elif [ -w "$role" ]; then
-    current_role=$(cat "$role")
-    [ "$current_role" = device ] || printf 'device' > "$role"
-    log "USB role: $(cat "$role")"
-fi
-
-mountpoint -q /sys/kernel/config || \
-    mount -t configfs configfs /sys/kernel/config
-
-if [ -d "$gadget" ] && [ -e "$gadget/UDC" ]; then
-    printf '\n' >"$gadget/UDC" || true
-fi
-
-mkdir -p \
-    "$gadget/strings/0x409" \
-    "$gadget/configs/c.1/strings/0x409"
-
-printf '0x2717' >"$gadget/idVendor"
-printf '0xff88' >"$gadget/idProduct"
-printf '0x0200' >"$gadget/bcdUSB"
-printf '0x0100' >"$gadget/bcdDevice"
-printf 'shennong-droidian' >"$gadget/strings/0x409/serialnumber"
-printf 'Xiaomi 14 Pro' >"$gadget/strings/0x409/manufacturer"
-printf 'Droidian USB Network' >"$gadget/strings/0x409/product"
-printf 'NCM network and SSH' >"$gadget/configs/c.1/strings/0x409/configuration"
-printf '250' >"$gadget/configs/c.1/MaxPower"
-
-if [ ! -d "$gadget/functions/$function_name" ]; then
-    mkdir -p "$gadget/functions/$function_name"
-fi
-printf '02:00:00:00:14:01' >"$gadget/functions/$function_name/dev_addr"
-printf '02:00:00:00:14:02' >"$gadget/functions/$function_name/host_addr"
-ln -sfn "$gadget/functions/$function_name" \
-    "$gadget/configs/c.1/$function_name"
-
-udc=
+# The vendor HAL starts its reset worker after receiving the framework callback.
+boot_id=$(cat /proc/sys/kernel/random/boot_id)
+ready=/var/lib/shennong/android-data/vendor/shennong-usb/framework.ready
 attempt=0
-while [ "$attempt" -lt 30 ]; do
-    for candidate in /sys/class/udc/*; do
-        [ -e "$candidate" ] || continue
-        udc=${candidate##*/}
-        break
-    done
-    [ -z "$udc" ] || break
+while [ "$(cat "$ready" 2>/dev/null || true)" != "$boot_id" ]; do
     attempt=$((attempt + 1))
+    [ "$attempt" -lt 60 ] || { log 'stock IUsb callback is not ready'; exit 1; }
     sleep 1
 done
-[ -n "$udc" ] || {
-    log 'no USB device controller is available'
-    exit 1
-}
-printf '%s' "$udc" >"$gadget/UDC"
 
-attempt=0
-while [ "$attempt" -lt 50 ] && [ ! -e /sys/class/net/usb0 ]; do
-    attempt=$((attempt + 1))
-    sleep 0.1
-done
-[ -e /sys/class/net/usb0 ] || {
-    log 'usb0 did not appear after binding the gadget'
-    exit 1
-}
-
-ip link set usb0 up
-ip address flush dev usb0
-ip address add "$address" dev usb0
-
-if [ -f /run/shennong-usb-dnsmasq.pid ]; then
-    old_pid=$(cat /run/shennong-usb-dnsmasq.pid 2>/dev/null || true)
-    [ -n "$old_pid" ] && kill "$old_pid" 2>/dev/null || true
-    rm -f /run/shennong-usb-dnsmasq.pid
+mountpoint -q /sys/kernel/config || mount -t configfs configfs /sys/kernel/config
+if [ -z "$(cat "$gadget/UDC" 2>/dev/null || true)" ]; then
+    # Do not reset the role or endpoints of an already bound working gadget.
+    mode=/sys/bus/platform/devices/a600000.ssusb/mode
+    role=/sys/class/usb_role/a600000.ssusb-role-switch/role
+    if [ -w "$mode" ]; then
+        if [ "$(cat "$mode")" != peripheral ] || [ ! -e /sys/class/udc/a600000.dwc3 ]; then
+            printf 'peripheral\n' > "$mode"
+        fi
+    elif [ -w "$role" ]; then
+        [ "$(cat "$role")" = device ] || printf 'device' > "$role"
+    fi
+    mkdir -p "$gadget/strings/0x409" "$gadget/configs/c.1/strings/0x409"
+    printf '0x2717' > "$gadget/idVendor"
+    printf '0xff88' > "$gadget/idProduct"
+    printf '0x0200' > "$gadget/bcdUSB"
+    printf '0x0100' > "$gadget/bcdDevice"
+    printf 'shennong-droidian' > "$gadget/strings/0x409/serialnumber"
+    printf 'Xiaomi 14 Pro' > "$gadget/strings/0x409/manufacturer"
+    printf 'Droidian USB Network' > "$gadget/strings/0x409/product"
+    printf 'NCM network and SSH' > "$gadget/configs/c.1/strings/0x409/configuration"
+    printf '250' > "$gadget/configs/c.1/MaxPower"
+    mkdir -p "$gadget/functions/ncm.usb0"
+    printf '02:00:00:00:14:01' > "$gadget/functions/ncm.usb0/dev_addr"
+    printf '02:00:00:00:14:02' > "$gadget/functions/ncm.usb0/host_addr"
+    [ -L "$gadget/configs/c.1/ncm.usb0" ] || \
+        ln -s "$gadget/functions/ncm.usb0" "$gadget/configs/c.1/ncm.usb0"
+    attempt=0
+    while [ ! -e /sys/class/udc/a600000.dwc3 ]; do
+        attempt=$((attempt + 1))
+        [ "$attempt" -lt 30 ] || { log 'USB controller is unavailable'; exit 1; }
+        sleep 1
+    done
+    printf 'a600000.dwc3' > "$gadget/UDC"
 fi
 
-dnsmasq \
-    --conf-file=/dev/null \
-    --interface=usb0 \
-    --bind-interfaces \
-    --except-interface=lo \
-    --dhcp-range=172.31.14.2,172.31.14.20,255.255.255.0,12h \
-    --dhcp-option=3 \
-    --dhcp-option=6,172.31.14.1 \
-    --log-facility=/var/log/shennong-usb-dnsmasq.log \
-    --pid-file=/run/shennong-usb-dnsmasq.pid
-
-log "USB NCM ready on $address using UDC $udc"
+# The address and sharing configuration never depend on a cellular/Wi-Fi uplink.
+ip link set usb0 up
+ip address replace "$address" dev usb0
+nmcli connection reload
+nmcli device set usb0 managed yes
+if ! nmcli --wait 15 connection up shennong-usb-sharing ifname usb0; then
+    # Report the failure, retaining the fixed local SSH address.
+    ip link set usb0 up
+    ip address replace "$address" dev usb0
+    log 'NetworkManager shared-mode activation failed'
+    exit 1
+fi
+log "USB shared network ready on $address"

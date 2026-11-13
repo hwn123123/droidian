@@ -1,3 +1,11 @@
+adaptation-xiaomi-shennong (0.1.2) unstable; urgency=medium
+
+  * Register the stock IUsb callback before binding Linux USB endpoints.
+  * Keep USB gadget ownership and transfer services in the Linux host.
+  * Default to a fixed 192.168.66.1 shared network independent of uplink status.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Fri, 13 Nov 2026 11:00:00 +0800
+
 adaptation-xiaomi-shennong (0.1.1) unstable; urgency=medium
 
   * Keep Android driver loading, time and networking under host ownership.

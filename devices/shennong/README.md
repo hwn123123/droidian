@@ -76,8 +76,8 @@ renderer and desktop patches are not part of this display validation.
 ## Build
 
 The arm64 Linux builder needs `debos`, `debootstrap`, `debhelper`, `fakeroot`,
-Clang/LLD, binutils, Python 3 and `gpgv`. Build the config packages and an
-upstream Droidian rootfs:
+Clang/LLD, an Android NDK sysroot, binutils, Python 3 and `gpgv`. Build the
+config packages and an upstream Droidian rootfs:
 
 ```sh
 sudo bash devices/shennong/tools/build-rootfs.sh
@@ -133,6 +133,23 @@ Image preparation also builds `compat/binder-no-secctx.c` against the image's
 own Bionic runtime and installs its output in the private vendor overlay.
 `install-binder-compat.sh` mounts that Android image read-only for the build;
 no proprietary libraries or compiled compatibility binaries are stored in Git.
+Set `ANDROID_NDK_ROOT` when preparing the device image: the stock USB port
+callback client is built from `compat/usb-framework.cpp` against that NDK and
+the captured Android system's Binder NDK library. On an arm64 Linux builder,
+native Clang uses the NDK sysroot, CRT and runtime libraries; no x86 compiler
+execution is required. Pass the NDK variable through `sudo` explicitly.
+
+USB defaults to NCM shared networking at `192.168.66.1/24`. Its fixed local
+SSH address and NetworkManager's shared-mode DHCP/DNS/NAT are enabled without
+testing cellular registration, dial state or Internet reachability. Connecting
+the Mac with a manual `192.168.66.2/24` address and no USB gateway keeps its
+existing Wi-Fi route. The Android port HAL owns Type-C events; the Linux host
+is the only ConfigFS/NCM and network owner. The device callback client follows
+the frozen [AOSP IUsb interface](https://android.googlesource.com/platform/hardware/interfaces/+/eee5499ba8381b50a29a541c2077b040a642fa18/usb/aidl/android/hardware/usb/IUsb.aidl).
+The fixed address and SSH were verified after a real reboot on 2026-11-13.
+An earlier package left a same-UUID `.dpkg-old` connection at the former
+address; the device-package migration removes that specific obsolete backup.
+MTP, OTG peripherals and USB role-switch controls are not yet validated.
 `build-boot-images.sh` repacks captured B boot images and preserves their REC
 dispatcher. Neither offline builder accesses a phone partition.
 

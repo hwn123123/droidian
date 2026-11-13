@@ -22,6 +22,10 @@ actions:
       - adaptation-hybris-phosh
       - fonts-noto-cjk
       - locales
+      - network-manager
+      - dnsmasq-base
+      - python3
+      - xdg-user-dirs
 
   - action: overlay
     description: Stage locally built adaptation packages
