@@ -316,6 +316,13 @@ continues to use NetworkManager's standard DHCP/DNS/NAT independently of data
 registration. The cellular setup is wanted by the Android container, but a
 cellular setup failure does not prevent the USB/display services from starting.
 
+The native automatic APN profile completed a real IPv4 connection in the live
+upgrade tests, and an explicit disconnect remained disconnected after removing
+the bridge's autonomous reconnect. A later package also serializes radio power
+operations. Post-upgrade reboot validation remains open: the latest ordinary
+reboot has not re-enumerated USB on the Mac, so startup logs are still needed
+before claiming automatic recovery after reboot.
+
 This remains a development port. These cellular checks cover the inserted SIM
 and IPv4 data. Dual-SIM data switching, IPv6, calls/IMS, messaging, Wi-Fi, audio,
 cameras, charging and suspend still need their own hardware validation.
