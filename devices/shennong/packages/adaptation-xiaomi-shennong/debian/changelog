@@ -1,3 +1,10 @@
+adaptation-xiaomi-shennong (0.1.9) unstable; urgency=medium
+
+  * Add the Tide wallpaper, readable typography and native phone appearance defaults.
+  * Use Papirus icons and retain user changes through GSettings.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Fri, 13 Nov 2026 19:00:00 +0800
+
 adaptation-xiaomi-shennong (0.1.8) unstable; urgency=medium
 
   * Mark the running slot successful from Droidian's native boot-complete unit.

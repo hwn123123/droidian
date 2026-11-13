@@ -1,0 +1,28 @@
+[org.gnome.desktop.interface:Phosh]
+gtk-theme='adw-gtk3'
+icon-theme='Papirus-Dark'
+color-scheme='prefer-dark'
+accent-color='teal'
+font-name='Inter 11'
+document-font-name='Noto Sans CJK SC 11'
+monospace-font-name='Monospace 11'
+font-antialiasing='grayscale'
+font-hinting='slight'
+show-battery-percentage=true
+clock-show-date=false
+
+[org.gnome.desktop.interface]
+clock-format='24h'
+
+[org.gnome.desktop.background:Phosh]
+picture-uri='file:///usr/share/backgrounds/shennong/tide-dark.png'
+picture-uri-dark='file:///usr/share/backgrounds/shennong/tide-dark.png'
+picture-options='zoom'
+primary-color='#071525'
+
+[org.gnome.desktop.screensaver:Phosh]
+picture-uri='file:///usr/share/backgrounds/shennong/tide-dark.png'
+picture-options='zoom'
+
+[sm.puri.phosh]
+favorites=['org.gnome.Calls.desktop', 'sm.puri.Chatty.desktop', 'firefox.desktop', 'org.gnome.Contacts.desktop', 'org.gnome.Settings.desktop', 'dev.tchx84.Portfolio.desktop', 'org.gnome.Console.desktop', 'org.gnome.Usage.desktop', 'org.gnome.eog.desktop', 'org.gnome.clocks.desktop', 'org.gnome.Calendar.desktop', 'org.gnome.Calculator.desktop']

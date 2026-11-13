@@ -21,6 +21,8 @@ actions:
     packages:
       - adaptation-hybris-phosh
       - fonts-noto-cjk
+      - fonts-inter
+      - papirus-icon-theme
       - locales
       - network-manager
       - dnsmasq-base

@@ -1,0 +1,1505 @@
+From: Ning <hwn123123@users.noreply.github.com>
+Subject: [PATCH] Native phone home with persistent touch ordering
+
+Extend the existing shell with a clock home, horizontal apps page and fixed
+favorites dock. Keep recent tasks separate from the home view, and return
+home with a touch tap on the persistent bottom handle. Store ordering in
+GSettings and reorder with GTK gestures inside the shell, leaving the
+compositor and Android display path intact. Match the audio template to the
+existing PhoshChannelBar type.
+
+diff --git a/data/mobi.phosh.shell.gschema.xml b/data/mobi.phosh.shell.gschema.xml
+index 4eef918..4410c5a 100644
+--- a/data/mobi.phosh.shell.gschema.xml
++++ b/data/mobi.phosh.shell.gschema.xml
+@@ -1,4 +1,11 @@
+ <schemalist>
++  <schema id="mobi.phosh.shell.home" path="/mobi/phosh/shell/home/">
++    <key name="app-order" type="as">
++      <default>[]</default>
++      <summary>Application order on the phone home page</summary>
++      <description>Desktop IDs reordered through the native touch launcher. Newly installed apps follow the saved order.</description>
++    </key>
++  </schema>
+ 
+   <schema id="mobi.phosh.shell.cell-broadcast" path="/mobi/phosh/shell/cell-broadcast/">
+     <key name="enabled" type="b">
+diff --git a/po/zh_CN.po b/po/zh_CN.po
+index 2e369d4..4e37f2e 100644
+--- a/po/zh_CN.po
++++ b/po/zh_CN.po
+@@ -422,7 +422,7 @@ msgstr "添加到收藏夹(_F)"
+ 
+ #: src/ui/app-grid-button.ui:89
+ msgid "View _Details"
+-msgstr ""
++msgstr "查看详情(_D)"
+ 
+ #: src/ui/app-grid.ui:21
+ msgid "Search apps…"
+@@ -795,3 +795,24 @@ msgstr ""
+ 
+ #~ msgid "Logout"
+ #~ msgstr "注销"
++
++msgid "Recent Apps"
++msgstr "最近任务"
++
++msgid "All Apps"
++msgstr "所有应用"
++
++msgid "Home"
++msgstr "主屏幕"
++
++msgid "Uninstall"
++msgstr "卸载"
++
++msgid "Add to Folder"
++msgstr "添加到文件夹"
++
++msgid "Create new folder"
++msgstr "新建文件夹"
++
++msgid "_Remove from Folder"
++msgstr "从文件夹中移除(_R)"
+diff --git a/src/app-grid-button.c b/src/app-grid-button.c
+index 9c9ced2..4d14717 100644
+--- a/src/app-grid-button.c
++++ b/src/app-grid-button.c
+@@ -38,6 +38,9 @@ struct _PhoshAppGridButtonPrivate {
+   GtkWidget             *popover;
+   GtkGesture            *long_gesture;
+   GtkGesture            *right_gesture;
++  GtkGesture            *home_drag;
++  gboolean               home_drag_active;
++  GtkWidget             *home_drop_target;
+ 
+   GMenu      *menu;
+   GMenu      *actions;
+@@ -61,6 +64,7 @@ static GParamSpec *props[LAST_PROP];
+ 
+ enum {
+   APP_LAUNCHED,
++  APP_MOVED,
+   N_SIGNALS
+ };
+ static guint signals[N_SIGNALS];
+@@ -121,6 +125,7 @@ phosh_app_grid_button_finalize (GObject *object)
+   PhoshAppGridButton *self = PHOSH_APP_GRID_BUTTON (object);
+   PhoshAppGridButtonPrivate *priv = phosh_app_grid_button_get_instance_private (self);
+ 
++  g_clear_object (&priv->home_drop_target);
+   g_clear_object (&priv->info);
+   g_clear_object (&priv->menu);
+   g_clear_object (&priv->actions);
+@@ -194,13 +199,105 @@ on_right_pressed (GtkWidget *self, int n_press, double x, double y, GtkGesture *
+     context_menu (self, (GdkEvent *) event);
+ }
+ 
++/* Reorder inside the shell, without a compositor-wide data-device drag. */
++static GtkWidget *
++home_button_at (GtkWidget *widget, GtkWidget *toplevel, int x, int y)
++{
++  int local_x, local_y;
++  if (!gtk_widget_get_mapped (widget) ||
++      !gtk_widget_translate_coordinates (toplevel, widget, x, y, &local_x, &local_y) ||
++      local_x < 0 || local_y < 0 ||
++      local_x >= gtk_widget_get_allocated_width (widget) ||
++      local_y >= gtk_widget_get_allocated_height (widget))
++    return NULL;
++  if (PHOSH_IS_APP_GRID_BUTTON (widget))
++    return widget;
++  if (GTK_IS_CONTAINER (widget)) {
++    g_autoptr (GList) children = gtk_container_get_children (GTK_CONTAINER (widget));
++    for (GList *l = children; l; l = l->next) {
++      GtkWidget *found = home_button_at (l->data, toplevel, x, y);
++      if (found)
++        return found;
++    }
++  }
++  return NULL;
++}
++
++
+ static void
+-on_long_pressed (GtkWidget *self, double x, double y, GtkGesture *gesture)
++set_home_drop_target (PhoshAppGridButton *self, GtkWidget *target)
+ {
+-  context_menu (self, NULL);
++  PhoshAppGridButtonPrivate *priv = phosh_app_grid_button_get_instance_private (self);
++  if (target == GTK_WIDGET (self))
++    target = NULL;
++  if (priv->home_drop_target == target)
++    return;
++  if (priv->home_drop_target)
++    gtk_style_context_remove_class (gtk_widget_get_style_context (priv->home_drop_target),
++                                     "home-drop-target");
++  g_set_object (&priv->home_drop_target, target);
++  if (target)
++    gtk_style_context_add_class (gtk_widget_get_style_context (target), "home-drop-target");
+ }
+ 
+ 
++static void
++on_long_pressed (GtkWidget *widget, double x, double y, GtkGesture *gesture)
++{
++  PhoshAppGridButton *self = PHOSH_APP_GRID_BUTTON (widget);
++  PhoshAppGridButtonPrivate *priv = phosh_app_grid_button_get_instance_private (self);
++  priv->home_drag_active = TRUE;
++  gtk_gesture_set_state (gesture, GTK_EVENT_SEQUENCE_CLAIMED);
++  gtk_style_context_add_class (gtk_widget_get_style_context (widget), "home-dragging");
++}
++
++
++static void
++on_home_drag_update (PhoshAppGridButton *self, double dx, double dy, GtkGestureDrag *gesture)
++{
++  PhoshAppGridButtonPrivate *priv = phosh_app_grid_button_get_instance_private (self);
++  GtkWidget *top = gtk_widget_get_toplevel (GTK_WIDGET (self));
++  double start_x, start_y;
++  int x, y;
++  if (!priv->home_drag_active || !gtk_gesture_drag_get_start_point (gesture, &start_x, &start_y))
++    return;
++  if (gtk_widget_translate_coordinates (GTK_WIDGET (self), top,
++                                         start_x + dx, start_y + dy, &x, &y))
++    set_home_drop_target (self, home_button_at (top, top, x, y));
++}
++
++
++static void
++on_home_drag_end (PhoshAppGridButton *self, double dx, double dy, GtkGestureDrag *gesture)
++{
++  PhoshAppGridButtonPrivate *priv = phosh_app_grid_button_get_instance_private (self);
++  g_autoptr (GtkWidget) target = NULL;
++  g_autofree char *source = NULL;
++  if (!priv->home_drag_active)
++    return;
++  on_home_drag_update (self, dx, dy, gesture);
++  priv->home_drag_active = FALSE;
++  gtk_style_context_remove_class (gtk_widget_get_style_context (GTK_WIDGET (self)), "home-dragging");
++  if (priv->home_drop_target)
++    target = g_object_ref (priv->home_drop_target);
++  set_home_drop_target (self, NULL);
++  source = g_strdup (g_app_info_get_id (priv->info));
++  if (target)
++    g_signal_emit (target, signals[APP_MOVED], 0, source);
++  else if (dx * dx + dy * dy < 64)
++    context_menu (GTK_WIDGET (self), NULL);
++}
++
++
++static void
++on_home_drag_cancel (PhoshAppGridButton *self, GdkEventSequence *sequence, GtkGesture *gesture)
++{
++  PhoshAppGridButtonPrivate *priv = phosh_app_grid_button_get_instance_private (self);
++  priv->home_drag_active = FALSE;
++  set_home_drop_target (self, NULL);
++  gtk_style_context_remove_class (gtk_widget_get_style_context (GTK_WIDGET (self)), "home-dragging");
++}
++
+ 
+ static void
+ activate_cb (PhoshAppGridButton *self)
+@@ -286,11 +383,15 @@ phosh_app_grid_button_class_init (PhoshAppGridButtonClass *klass)
+ 
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGridButton, long_gesture);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGridButton, right_gesture);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGridButton, home_drag);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGridButton, menu);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGridButton, actions);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGridButton, folders);
+ 
+   gtk_widget_class_bind_template_callback (widget_class, on_long_pressed);
++  gtk_widget_class_bind_template_callback (widget_class, on_home_drag_update);
++  gtk_widget_class_bind_template_callback (widget_class, on_home_drag_end);
++  gtk_widget_class_bind_template_callback (widget_class, on_home_drag_cancel);
+   gtk_widget_class_bind_template_callback (widget_class, on_right_pressed);
+   gtk_widget_class_bind_template_callback (widget_class, activate_cb);
+ 
+@@ -300,6 +401,10 @@ phosh_app_grid_button_class_init (PhoshAppGridButtonClass *klass)
+                                         0, NULL, NULL, NULL,
+                                         G_TYPE_NONE, 1, G_TYPE_APP_INFO);
+ 
++  signals[APP_MOVED] = g_signal_new ("app-moved", G_TYPE_FROM_CLASS (klass),
++                                     G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL,
++                                     G_TYPE_NONE, 1, G_TYPE_STRING);
++
+   gtk_widget_class_set_css_name (widget_class, "phosh-app-grid-button");
+ }
+ 
+@@ -548,6 +653,8 @@ phosh_app_grid_button_init (PhoshAppGridButton *self)
+   g_type_ensure (PHOSH_TYPE_FADING_LABEL);
+ 
+   gtk_widget_init_template (GTK_WIDGET (self));
++  gtk_gesture_group (priv->long_gesture, priv->home_drag);
++
+ 
+   gtk_popover_bind_model (GTK_POPOVER (priv->popover),
+                           G_MENU_MODEL (priv->menu),
+diff --git a/src/app-grid.c b/src/app-grid.c
+index cc2fe6f..93db521 100644
+--- a/src/app-grid.c
++++ b/src/app-grid.c
+@@ -15,6 +15,7 @@
+ #include "app-list-model.h"
+ #include "favorite-list-model.h"
+ #include "shell-priv.h"
++#include "wall-clock.h"
+ #include "util.h"
+ 
+ #include "gtk-list-models/gtksortlistmodel.h"
+@@ -48,6 +49,11 @@ struct _PhoshAppGridPrivate {
+   GtkWidget *search;
+   GtkWidget *apps;
+   GtkWidget *favs;
++  GtkWidget *home_favs;
++  GtkWidget *home_dock;
++  GtkWidget *home_clock;
++  GtkWidget *home_date;
++  GtkWidget *home_page_indicator;
+   GtkWidget *favs_revealer;
+   GtkWidget *scrolled_window;
+   GtkWidget *btn_adaptive;
+@@ -68,6 +74,12 @@ struct _PhoshAppGridPrivate {
+   char *search_string;
+   gboolean filter_adaptive;
+   GSettings *settings;
++  GSettings *home_settings;
++  GStrv home_order;
++  GtkSortListModel *sorted;
++  GListStore *home_shortcuts;
++  GListStore *home_dock_items;
++  GPtrArray *home_app_pages;
+   GStrv force_adaptive;
+   GSimpleActionGroup *actions;
+   PhoshAppFilterModeFlags filter_mode;
+@@ -115,6 +127,85 @@ phosh_app_grid_get_property (GObject    *object,
+ }
+ 
+ 
++static void show_main_grid (PhoshAppGrid *self);
++static void home_app_moved (PhoshAppGridButton *button, const char *source, PhoshAppGrid *self);
++
++
++static void
++update_deck_swipe_directions (HdyDeck       *deck,
++                              GParamSpec    *pspec,
++                              PhoshAppGrid  *self)
++{
++  PhoshAppGridPrivate *priv;
++  GtkWidget *visible;
++  GtkWidget *home;
++  gboolean can_swipe_back = FALSE;
++  gboolean can_swipe_forward = FALSE;
++  gboolean show_home_dock = FALSE;
++
++  (void) pspec;
++  g_return_if_fail (PHOSH_IS_APP_GRID (self));
++
++  priv = phosh_app_grid_get_instance_private (self);
++  visible = hdy_deck_get_visible_child (deck);
++  home = hdy_deck_get_child_by_name (deck, "phone_home");
++
++  if (visible == home) {
++    show_home_dock = TRUE;
++    can_swipe_forward = priv->home_app_pages && priv->home_app_pages->len > 0;
++  } else if (priv->home_app_pages) {
++    for (guint i = 0; i < priv->home_app_pages->len; i++) {
++      if (g_ptr_array_index (priv->home_app_pages, i) != visible)
++        continue;
++
++      show_home_dock = TRUE;
++      can_swipe_back = TRUE;
++      can_swipe_forward = i + 1 < priv->home_app_pages->len;
++      break;
++    }
++  }
++
++  if (priv->home_dock)
++    gtk_widget_set_visible (priv->home_dock, show_home_dock);
++
++  /* Left swipes advance through phone-style app pages; right swipes return. */
++  hdy_deck_set_can_swipe_back (deck, can_swipe_back);
++  hdy_deck_set_can_swipe_forward (deck, can_swipe_forward);
++}
++
++
++static void
++show_home_page (PhoshAppGrid *self)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++
++  /* Close any open folder before returning to the home page. */
++  if (priv->open_folder != NULL)
++    show_main_grid (self);
++
++  hdy_deck_set_visible_child_name (HDY_DECK (priv->deck), "phone_home");
++}
++
++
++static void
++show_all_apps (PhoshAppGrid *self)
++{
++  show_main_grid (self);
++}
++
++
++static void
++update_home_clock (PhoshWallClock *clock, GParamSpec *pspec, PhoshAppGrid *self)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++  g_autofree char *date = phosh_wall_clock_local_date (clock);
++
++  gtk_label_set_text (GTK_LABEL (priv->home_clock),
++                      phosh_wall_clock_get_clock (clock, TRUE));
++  gtk_label_set_text (GTK_LABEL (priv->home_date), date ?: "");
++}
++
++
+ static void
+ show_main_grid (PhoshAppGrid *self)
+ {
+@@ -184,6 +275,8 @@ create_folder_app_launcher (gpointer item, gpointer self)
+   phosh_app_grid_button_set_folder_info (PHOSH_APP_GRID_BUTTON (btn), priv->open_folder);
+   g_signal_connect (btn, "app-launched", G_CALLBACK (app_launched_cb), self);
+ 
++  if (PHOSH_IS_APP_GRID_BUTTON (btn))
++    g_signal_connect (btn, "app-moved", G_CALLBACK (home_app_moved), self);
+   gtk_widget_set_visible (btn, TRUE);
+ 
+   return btn;
+@@ -239,12 +332,28 @@ folder_launched_cb (GtkWidget       *widget,
+ }
+ 
+ 
++static int
++home_order_index (const char * const *order, const char *id)
++{
++  for (int i = 0; order && order[i]; i++)
++    if (g_strcmp0 (order[i], id) == 0)
++      return i;
++  return G_MAXINT;
++}
++
++
+ static int
+ sort_apps (gconstpointer a, gconstpointer b, gpointer data)
+ {
+   const char *empty = "";
+   GAppInfo *info1 = G_APP_INFO (a);
+   GAppInfo *info2 = G_APP_INFO (b);
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (data);
++  int first = home_order_index ((const char * const *) priv->home_order, g_app_info_get_id (info1));
++  int second = home_order_index ((const char * const *) priv->home_order, g_app_info_get_id (info2));
++  if (first != second)
++    return first < second ? -1 : 1;
++
+ 
+   g_autofree char *s1 = g_utf8_casefold (g_app_info_get_name (info1), -1);
+   g_autofree char *s2 = g_utf8_casefold (g_app_info_get_name (info2), -1);
+@@ -361,6 +470,96 @@ search_apps (gpointer item, gpointer data)
+ }
+ 
+ 
++typedef struct {
++  PhoshAppGrid *grid;
++  GAppInfo *target;
++  char *source;
++} HomeAppMove;
++
++
++static void
++home_app_move_free (gpointer data)
++{
++  HomeAppMove *move = data;
++  g_object_unref (move->grid);
++  g_object_unref (move->target);
++  g_free (move->source);
++  g_free (move);
++}
++
++
++static gboolean
++finish_home_app_moved (gpointer data)
++{
++  HomeAppMove *move = data;
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (move->grid);
++  GAppInfo *target = move->target;
++  const char *source = move->source;
++  const char *target_id = g_app_info_get_id (target);
++  gboolean favorite = phosh_favorite_list_model_app_is_favorite (NULL, target);
++  g_autoptr (GStrvBuilder) builder = g_strv_builder_new ();
++  g_auto (GStrv) ids = NULL;
++  gboolean inserted = FALSE;
++
++  if (favorite) {
++    ids = g_settings_get_strv (priv->settings, "favorites");
++  } else {
++    g_autoptr (GStrvBuilder) current = g_strv_builder_new ();
++    for (guint i = 0; i < g_list_model_get_n_items (G_LIST_MODEL (priv->model)); i++) {
++      g_autoptr (GAppInfo) app = g_list_model_get_item (G_LIST_MODEL (priv->model), i);
++      g_strv_builder_add (current, g_app_info_get_id (app));
++    }
++    ids = g_strv_builder_end (current);
++  }
++  for (guint i = 0; ids[i]; i++) {
++    if (g_strcmp0 (ids[i], source) == 0)
++      continue;
++    if (g_strcmp0 (ids[i], target_id) == 0) {
++      g_strv_builder_add (builder, source);
++      inserted = TRUE;
++    }
++    g_strv_builder_add (builder, ids[i]);
++  }
++  if (!inserted)
++    g_strv_builder_add (builder, source);
++  {
++    g_auto (GStrv) result = g_strv_builder_end (builder);
++    if (favorite)
++      g_settings_set_strv (priv->settings, "favorites", (const char * const *) result);
++    else {
++      g_autoptr (GAppInfo) moved = G_APP_INFO (g_desktop_app_info_new (source));
++      if (moved && phosh_favorite_list_model_app_is_favorite (NULL, moved))
++        phosh_favorite_list_model_remove_app (NULL, moved);
++      g_settings_set_strv (priv->home_settings, "app-order", (const char * const *) result);
++    }
++  }
++  return G_SOURCE_REMOVE;
++}
++
++
++static void
++home_app_moved (PhoshAppGridButton *button, const char *source, PhoshAppGrid *self)
++{
++  HomeAppMove *move = g_new0 (HomeAppMove, 1);
++  move->grid = g_object_ref (self);
++  move->target = g_object_ref (phosh_app_grid_button_get_app_info (button));
++  move->source = g_strdup (source);
++  /* Rebuilding launchers during touch release invalidates GTK's event target. */
++  g_idle_add_full (G_PRIORITY_DEFAULT_IDLE, finish_home_app_moved,
++                   move, home_app_move_free);
++}
++
++
++static void
++home_order_changed (GSettings *settings, const char *key, PhoshAppGrid *self)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++  g_strfreev (priv->home_order);
++  priv->home_order = g_settings_get_strv (settings, "app-order");
++  gtk_sort_list_model_resort (priv->sorted);
++}
++
++
+ static GtkWidget *
+ create_favorite_launcher (gpointer item, gpointer self)
+ {
+@@ -368,11 +567,50 @@ create_favorite_launcher (gpointer item, gpointer self)
+ 
+   g_signal_connect (btn, "app-launched", G_CALLBACK (app_launched_cb), self);
+ 
++  if (PHOSH_IS_APP_GRID_BUTTON (btn))
++    g_signal_connect (btn, "app-moved", G_CALLBACK (home_app_moved), self);
++  gtk_widget_set_visible (btn, TRUE);
++
++  return btn;
++}
++
++static GtkWidget *
++create_home_launcher (gpointer item, gpointer self)
++{
++  GtkWidget *btn = phosh_app_grid_button_new (G_APP_INFO (item));
++
++  g_signal_connect (btn, "app-launched", G_CALLBACK (app_launched_cb), self);
++  if (PHOSH_IS_APP_GRID_BUTTON (btn))
++    g_signal_connect (btn, "app-moved", G_CALLBACK (home_app_moved), self);
+   gtk_widget_set_visible (btn, TRUE);
+ 
+   return btn;
+ }
+ 
++
++static void
++sync_home_favorites (GListModel *favorites, PhoshAppGrid *self)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++  guint n_items = g_list_model_get_n_items (favorites);
++  guint n_dock_items = MIN (n_items, 4);
++
++  g_list_store_remove_all (priv->home_shortcuts);
++  g_list_store_remove_all (priv->home_dock_items);
++
++  for (guint i = 0; i < n_items; i++) {
++    GObject *app = G_OBJECT (g_list_model_get_item (favorites, i));
++
++    if (i < n_dock_items)
++      g_list_store_append (priv->home_dock_items, app);
++    else
++      g_list_store_append (priv->home_shortcuts, app);
++
++    g_object_unref (app);
++  }
++}
++
++
+ static void
+ toggle_favorites_revealer (PhoshAppGrid *self)
+ {
+@@ -395,6 +633,8 @@ favorites_changed (GListModel *list, guint pos, guint removed, guint added, Phos
+ 
+   toggle_favorites_revealer (self);
+ 
++  sync_home_favorites (list, self);
++
+   /* We don't show favorites in the main list, filter them out */
+   gtk_filter_list_model_refilter (priv->model);
+ }
+@@ -413,12 +653,145 @@ create_launcher (gpointer item, gpointer self)
+     g_signal_connect (btn, "app-launched", G_CALLBACK (app_launched_cb), self);
+   }
+ 
++  if (PHOSH_IS_APP_GRID_BUTTON (btn))
++    g_signal_connect (btn, "app-moved", G_CALLBACK (home_app_moved), self);
+   gtk_widget_set_visible (btn, TRUE);
+ 
+   return btn;
+ }
+ 
+ 
++static GtkWidget *
++create_home_app_page (PhoshAppGrid *self, guint page_num, guint n_pages, GListModel *apps)
++{
++  GtkWidget *page = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
++  GtkWidget *scrolled = gtk_scrolled_window_new (NULL, NULL);
++  GtkWidget *grid = gtk_grid_new ();
++  GtkWidget *footer = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
++  GtkWidget *indicator = gtk_label_new (NULL);
++  guint start = 0;
++  guint end = g_list_model_get_n_items (apps);
++  guint n_cells = ((end + 3) / 4) * 4;
++  g_autofree char *page_text = g_strdup ("○  ●");
++
++  gtk_widget_set_visible (page, TRUE);
++  gtk_widget_set_hexpand (page, TRUE);
++  gtk_widget_set_vexpand (page, TRUE);
++  gtk_style_context_add_class (gtk_widget_get_style_context (page), "phosh-phone-home-app-page");
++
++  gtk_widget_set_visible (scrolled, TRUE);
++  gtk_widget_set_hexpand (scrolled, TRUE);
++  gtk_widget_set_vexpand (scrolled, TRUE);
++  gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolled), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
++  gtk_box_pack_start (GTK_BOX (page), scrolled, TRUE, TRUE, 0);
++
++  gtk_widget_set_visible (grid, TRUE);
++  gtk_widget_set_hexpand (grid, TRUE);
++  gtk_widget_set_halign (grid, GTK_ALIGN_FILL);
++  gtk_widget_set_valign (grid, GTK_ALIGN_START);
++  gtk_widget_set_margin_start (grid, 8);
++  gtk_widget_set_margin_end (grid, 8);
++  gtk_widget_set_margin_top (grid, 20);
++  gtk_widget_set_margin_bottom (grid, 20);
++  gtk_grid_set_column_homogeneous (GTK_GRID (grid), TRUE);
++  gtk_grid_set_row_homogeneous (GTK_GRID (grid), TRUE);
++  gtk_grid_set_column_spacing (GTK_GRID (grid), 8);
++  gtk_grid_set_row_spacing (GTK_GRID (grid), 12);
++  gtk_container_add (GTK_CONTAINER (scrolled), grid);
++
++  /* Keep four columns and complete the final row with invisible placeholders. */
++  for (guint page_index = 0; page_index < n_cells; page_index++) {
++    guint app_index = start + page_index;
++    GtkWidget *button = NULL;
++
++    if (app_index < end) {
++      GObject *app = G_OBJECT (g_list_model_get_item (apps, app_index));
++      if (app) {
++        button = create_launcher (app, self);
++        g_object_unref (app);
++      }
++    }
++
++    if (button == NULL) {
++      button = gtk_label_new (NULL);
++      gtk_widget_set_visible (button, TRUE);
++      gtk_widget_set_can_focus (button, FALSE);
++      gtk_widget_set_sensitive (button, FALSE);
++      gtk_widget_set_hexpand (button, TRUE);
++      gtk_widget_set_vexpand (button, TRUE);
++      gtk_widget_set_opacity (button, 0.0);
++    }
++
++    gtk_grid_attach (GTK_GRID (grid), button, page_index % 4, page_index / 4, 1, 1);
++  }
++
++  gtk_widget_set_visible (footer, TRUE);
++  gtk_widget_set_visible (indicator, TRUE);
++  gtk_widget_set_halign (indicator, GTK_ALIGN_CENTER);
++  gtk_widget_set_margin_top (indicator, 6);
++  gtk_widget_set_margin_bottom (indicator, 6);
++  gtk_label_set_text (GTK_LABEL (indicator), page_text);
++  gtk_style_context_add_class (gtk_widget_get_style_context (indicator), "phosh-phone-home-page-indicator");
++  gtk_box_pack_start (GTK_BOX (footer), indicator, FALSE, FALSE, 0);
++  gtk_box_pack_end (GTK_BOX (page), footer, FALSE, FALSE, 0);
++
++  return page;
++}
++
++static void
++rebuild_home_app_pages (PhoshAppGrid *self)
++{
++  PhoshAppGridPrivate *priv = phosh_app_grid_get_instance_private (self);
++  HdyDeck *deck = HDY_DECK (priv->deck);
++  GtkWidget *home = hdy_deck_get_child_by_name (deck, "phone_home");
++  GtkWidget *visible = hdy_deck_get_visible_child (deck);
++  guint n_apps = g_list_model_get_n_items (G_LIST_MODEL (priv->model));
++  guint n_pages = n_apps > 0 ? 1 : 0;
++  GtkWidget *after = home;
++  gboolean was_apps = priv->home_app_pages &&
++    g_ptr_array_find (priv->home_app_pages, visible, NULL);
++  guint duration = hdy_deck_get_transition_duration (deck);
++
++  hdy_deck_set_transition_duration (deck, 0);
++
++  for (guint i = 0; i < (priv->home_app_pages ? priv->home_app_pages->len : 0); i++) {
++    GtkWidget *page = g_ptr_array_index (priv->home_app_pages, i);
++    if (visible == page)
++      hdy_deck_set_visible_child (deck, home);
++    gtk_container_remove (GTK_CONTAINER (deck), page);
++  }
++  if (priv->home_app_pages)
++    g_ptr_array_set_size (priv->home_app_pages, 0);
++  else
++    priv->home_app_pages = g_ptr_array_new ();
++
++  for (guint i = 0; i < n_pages; i++) {
++    GtkWidget *page = create_home_app_page (self, i, n_pages, G_LIST_MODEL (priv->model));
++    hdy_deck_insert_child_after (deck, page, after);
++    g_ptr_array_add (priv->home_app_pages, page);
++    after = page;
++  }
++
++  if (priv->home_page_indicator) {
++    g_autofree char *page_text = g_strdup (n_pages > 0 ? "●  ○" : "●");
++    gtk_label_set_text (GTK_LABEL (priv->home_page_indicator), page_text);
++  }
++  if (was_apps && n_pages)
++    hdy_deck_set_visible_child (deck, g_ptr_array_index (priv->home_app_pages, 0));
++  hdy_deck_set_transition_duration (deck, duration);
++  update_deck_swipe_directions (deck, NULL, self);
++}
++
++
++static void
++on_home_apps_changed (GListModel *model, guint position, guint removed, guint added, PhoshAppGrid *self)
++{
++  (void) position;
++  (void) removed;
++  (void) added;
++  rebuild_home_app_pages (self);
++}
++
+ static void
+ phosh_app_grid_init (PhoshAppGrid *self)
+ {
+@@ -426,9 +799,16 @@ phosh_app_grid_init (PhoshAppGrid *self)
+   GtkSortListModel *sorted;
+   PhoshFavoriteListModel *favorites;
+   g_autoptr (GAction) action = NULL;
++  GtkWidget *main_grid;
+ 
+   gtk_widget_init_template (GTK_WIDGET (self));
+ 
++
++  main_grid = hdy_deck_get_child_by_name (HDY_DECK (priv->deck), "main_grid");
++  if (main_grid == NULL)
++    g_warning ("Could not find the Phosh app list page");
++  g_signal_connect (priv->deck, "notify::visible-child",
++                    G_CALLBACK (update_deck_swipe_directions), self);
+   favorites = phosh_favorite_list_model_get_default ();
+ 
+   gtk_flow_box_bind_model (GTK_FLOW_BOX (priv->favs),
+@@ -436,20 +816,34 @@ phosh_app_grid_init (PhoshAppGrid *self)
+                            create_favorite_launcher,
+                            self,
+                            NULL);
++  priv->home_shortcuts = g_list_store_new (G_TYPE_OBJECT);
++  priv->home_dock_items = g_list_store_new (G_TYPE_OBJECT);
++  gtk_flow_box_bind_model (GTK_FLOW_BOX (priv->home_favs),
++                           G_LIST_MODEL (priv->home_shortcuts),
++                           create_home_launcher, self, NULL);
++  gtk_flow_box_bind_model (GTK_FLOW_BOX (priv->home_dock),
++                           G_LIST_MODEL (priv->home_dock_items),
++                           create_favorite_launcher, self, NULL);
++  sync_home_favorites (G_LIST_MODEL (favorites), self);
+   g_signal_connect (favorites,
+                     "items-changed",
+                     G_CALLBACK (favorites_changed),
+                     self);
+ 
++  priv->settings = g_settings_new ("sm.puri.phosh");
++  priv->home_settings = g_settings_new ("mobi.phosh.shell.home");
++  priv->home_order = g_settings_get_strv (priv->home_settings, "app-order");
+   /* fill the grid with apps */
+   sorted = gtk_sort_list_model_new (G_LIST_MODEL (phosh_app_list_model_get_default ()),
+                                     sort_apps,
+-                                    NULL,
++                                    self,
+                                     NULL);
+   priv->model = gtk_filter_list_model_new (G_LIST_MODEL (sorted),
+                                            search_apps,
+                                            self,
+                                            NULL);
++  priv->sorted = sorted;
++  g_signal_connect (priv->home_settings, "changed::app-order", G_CALLBACK (home_order_changed), self);
+   g_object_unref (sorted);
+   gtk_flow_box_bind_model (GTK_FLOW_BOX (priv->apps),
+                            G_LIST_MODEL (priv->model),
+@@ -457,22 +851,35 @@ phosh_app_grid_init (PhoshAppGrid *self)
+                            self,
+                            NULL);
+ 
+-  priv->settings = g_settings_new ("sm.puri.phosh");
+   g_object_connect (priv->settings,
+                     "swapped-signal::changed::force-adaptive", on_filter_setting_changed, self,
+                     "swapped-signal::changed::app-filter-mode", on_filter_setting_changed, self,
+                     NULL);
+   on_filter_setting_changed (self, NULL, NULL);
++  g_signal_connect (priv->model, "items-changed",
++                    G_CALLBACK (on_home_apps_changed), self);
++  rebuild_home_app_pages (self);
+ 
+   priv->actions = g_simple_action_group_new ();
+   gtk_widget_insert_action_group (GTK_WIDGET (self), "app-grid", G_ACTION_GROUP (priv->actions));
+   action = G_ACTION (g_property_action_new ("filter-adaptive", self, "filter-adaptive"));
+   g_action_map_add_action (G_ACTION_MAP (priv->actions), action);
+ 
++  /* Start the Phosh home view on every fresh overview open. */
++  hdy_deck_set_visible_child_name (HDY_DECK (priv->deck), "phone_home");
++  PhoshWallClock *clock = phosh_wall_clock_get_default ();
++  update_home_clock (clock, NULL, self);
++  g_signal_connect_object (clock, "notify::time", G_CALLBACK (update_home_clock),
++                           self, 0);
++  g_signal_connect_object (clock, "notify::date-time", G_CALLBACK (update_home_clock),
++                           self, 0);
++
++  update_deck_swipe_directions (HDY_DECK (priv->deck), NULL, self);
+   toggle_favorites_revealer (self);
+ }
+ 
+ 
++
+ static void
+ phosh_app_grid_dispose (GObject *object)
+ {
+@@ -481,10 +888,14 @@ phosh_app_grid_dispose (GObject *object)
+ 
+   g_clear_object (&priv->open_folder);
+   g_clear_object (&priv->actions);
++  g_clear_object (&priv->home_shortcuts);
++  g_clear_object (&priv->home_dock_items);
+   g_clear_object (&priv->model);
+   g_clear_object (&priv->settings);
++  g_clear_object (&priv->home_settings);
+   g_clear_handle_id (&priv->debounce, g_source_remove);
+ 
++  g_clear_pointer (&priv->home_app_pages, g_ptr_array_unref);
+   G_OBJECT_CLASS (phosh_app_grid_parent_class)->dispose (object);
+ }
+ 
+@@ -497,6 +908,7 @@ phosh_app_grid_finalize (GObject *object)
+ 
+   g_clear_pointer (&priv->search_string, g_free);
+   g_strfreev (priv->force_adaptive);
++  g_strfreev (priv->home_order);
+ 
+   G_OBJECT_CLASS (phosh_app_grid_parent_class)->finalize (object);
+ }
+@@ -717,7 +1129,12 @@ phosh_app_grid_class_init (PhoshAppGridClass *klass)
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, favs_revealer);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_apps);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_name_btn);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, home_clock);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, home_date);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, home_favs);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, home_dock);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_name_img);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, home_page_indicator);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_name_entry);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_name_label);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshAppGrid, folder_stack);
+@@ -733,6 +1150,8 @@ phosh_app_grid_class_init (PhoshAppGridClass *klass)
+   gtk_widget_class_bind_template_callback (widget_class, on_search_lost_focus);
+   gtk_widget_class_bind_template_callback (widget_class, show_main_grid);
+ 
++  gtk_widget_class_bind_template_callback (widget_class, show_home_page);
++  gtk_widget_class_bind_template_callback (widget_class, show_all_apps);
+   gtk_widget_class_set_css_name (widget_class, "phosh-app-grid");
+ }
+ 
+@@ -765,7 +1184,7 @@ phosh_app_grid_reset (PhoshAppGrid *self)
+   /* Set duration to 0 to avoid the simultaneous animation of grid sliding up and deck sliding
+    * right. If not done, it feels like the deck is spiraling diagonally up. */
+   hdy_deck_set_transition_duration (HDY_DECK (priv->deck), 0);
+-  show_main_grid (self);
++  show_home_page (self);
+   hdy_deck_set_transition_duration (HDY_DECK (priv->deck), 200);
+ }
+ 
+@@ -777,6 +1196,7 @@ phosh_app_grid_focus_search (PhoshAppGrid *self)
+ 
+   g_return_if_fail (PHOSH_IS_APP_GRID (self));
+   priv = phosh_app_grid_get_instance_private (self);
++  show_all_apps (self);
+   gtk_widget_grab_focus (priv->search);
+ }
+ 
+diff --git a/src/device/shennong-14pro-panel.json b/src/device/shennong-14pro-panel.json
+new file mode 100644
+index 0000000..d4ba4f4
+--- /dev/null
++++ b/src/device/shennong-14pro-panel.json
+@@ -0,0 +1,12 @@
++{
++  "name": "Shennong Xiaomi 14 Pro",
++  "x-res": 1440,
++  "y-res": 3200,
++  "border-radius": 72,
++  "cutouts": [
++    {
++      "name": "centered camera",
++      "path": "M 672,62 C 672,35 694,14 720,14 C 746,14 768,35 768,62 C 768,89 746,110 720,110 C 694,110 672,89 672,62 Z"
++    }
++  ]
++}
+diff --git a/src/home.c b/src/home.c
+index e889f26..b30a764 100644
+--- a/src/home.c
++++ b/src/home.c
+@@ -232,8 +232,13 @@ on_home_released (GtkButton *button, int n_press, double x, double y, GtkGesture
+ 
+   g_return_if_fail (PHOSH_IS_HOME (self));
+ 
+-  if (phosh_util_gesture_is_touch (GTK_GESTURE_SINGLE (gesture)) == FALSE)
++  if (phosh_util_gesture_is_touch (GTK_GESTURE_SINGLE (gesture))) {
++    /* A touch tap on the persistent bottom handle returns to the phone home. */
++    phosh_overview_reset (PHOSH_OVERVIEW (self->overview));
++    phosh_home_set_state (self, PHOSH_HOME_STATE_UNFOLDED);
++  } else {
+     phosh_home_set_state (self, !self->state);
++  }
+ }
+ 
+ 
+diff --git a/src/layout-manager.c b/src/layout-manager.c
+index a6187ac..558ac5f 100644
+--- a/src/layout-manager.c
++++ b/src/layout-manager.c
+@@ -414,6 +414,18 @@ phosh_layout_manager_init (PhoshLayoutManager *self)
+   if (compatibles != NULL) {
+     info = gm_device_info_new ((const char * const *)compatibles);
+     g_set_object (&self->panel, gm_device_info_get_display_panel (info));
++    /* Use the existing cutout layout on the vendor DT's common compatible. */
++    if (self->panel == NULL) {
++      for (guint i = 0; compatibles[i] != NULL; i++) {
++        if (g_str_equal (compatibles[i], "qcom,pineapple")) {
++          self->panel = gm_display_panel_new_from_resource (
++            "/mobi/phosh/device/shennong-14pro-panel.json", &err);
++          if (self->panel == NULL)
++            g_warning ("Could not load the display cutout: %s", err->message);
++          break;
++        }
++      }
++    }
+   }
+ 
+   if (self->panel) {
+diff --git a/src/overview.c b/src/overview.c
+index 8fae71c..875d2ee 100644
+--- a/src/overview.c
++++ b/src/overview.c
+@@ -58,6 +58,8 @@ typedef struct {
+   /* Running activities */
+   HdyCarousel        *carousel_running_activities;
+   GtkWidget          *app_grid;
++  GtkWidget          *phone_views;
++  GtkWidget          *recent_button;
+   PhoshActivity      *activity;
+ 
+   PhoshAppTracker    *app_tracker;     /* unowned */
+@@ -584,6 +586,24 @@ toplevel_to_activity (PhoshOverview *self, PhoshToplevel *toplevel)
+ }
+ 
+ 
++static void
++on_phone_home (PhoshOverview *self)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  phosh_app_grid_reset (PHOSH_APP_GRID (priv->app_grid));
++  gtk_stack_set_visible_child_name (GTK_STACK (priv->phone_views), "home");
++}
++
++
++static void
++on_phone_recents (PhoshOverview *self)
++{
++  PhoshOverviewPrivate *priv = phosh_overview_get_instance_private (self);
++  if (priv->has_activities)
++    gtk_stack_set_visible_child_name (GTK_STACK (priv->phone_views), "recents");
++}
++
++
+ static void
+ set_has_activities (PhoshOverview *self)
+ {
+@@ -596,6 +616,9 @@ set_has_activities (PhoshOverview *self)
+ 
+   priv->has_activities = has_activities;
+   gtk_widget_set_visible (GTK_WIDGET (priv->carousel_running_activities), has_activities);
++  gtk_widget_set_sensitive (priv->recent_button, has_activities);
++  if (!has_activities)
++    gtk_stack_set_visible_child_name (GTK_STACK (priv->phone_views), "home");
+   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_HAS_ACTIVITIES]);
+ }
+ 
+@@ -817,6 +840,10 @@ phosh_overview_class_init (PhoshOverviewClass *klass)
+   gtk_widget_class_set_template_from_resource (widget_class, "/mobi/phosh/ui/overview.ui");
+ 
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshOverview, app_grid);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshOverview, phone_views);
++  gtk_widget_class_bind_template_child_private (widget_class, PhoshOverview, recent_button);
++  gtk_widget_class_bind_template_callback (widget_class, on_phone_home);
++  gtk_widget_class_bind_template_callback (widget_class, on_phone_recents);
+   gtk_widget_class_bind_template_child_private (widget_class, PhoshOverview,
+                                                 carousel_running_activities);
+   gtk_widget_class_bind_template_callback (widget_class, on_app_launched);
+@@ -879,7 +906,7 @@ phosh_overview_reset (PhoshOverview *self)
+   g_return_if_fail (PHOSH_IS_OVERVIEW (self));
+   priv = phosh_overview_get_instance_private (self);
+ 
+-  phosh_app_grid_reset (PHOSH_APP_GRID (priv->app_grid));
++  on_phone_home (self);
+ }
+ 
+ 
+@@ -890,6 +917,7 @@ phosh_overview_focus_app_search (PhoshOverview *self)
+ 
+   g_return_if_fail (PHOSH_IS_OVERVIEW (self));
+   priv = phosh_overview_get_instance_private (self);
++  gtk_stack_set_visible_child_name (GTK_STACK (priv->phone_views), "home");
+   phosh_app_grid_focus_search (PHOSH_APP_GRID (priv->app_grid));
+ }
+ 
+diff --git a/src/phosh.gresources.xml b/src/phosh.gresources.xml
+index a9b3d64..2b10485 100644
+--- a/src/phosh.gresources.xml
++++ b/src/phosh.gresources.xml
+@@ -2,6 +2,7 @@
+ <gresources>
+   <gresource prefix="/mobi/phosh">
+     <file preprocess="xml-stripblanks">ui/activity.ui</file>
++    <file>device/shennong-14pro-panel.json</file>
+     <file preprocess="xml-stripblanks">ui/app-auth-prompt.ui</file>
+     <file preprocess="xml-stripblanks">ui/app-grid-base-button.ui</file>
+     <file preprocess="xml-stripblanks">ui/app-grid-button.ui</file>
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index 426d63d..4a7b17a 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -24,14 +24,14 @@ phosh-top-panel-bg {
+ }
+ 
+ #top-bar {
+-  padding-top: 4px;
+-  padding-bottom: 4px;
++  padding-top: 6px;
++  padding-bottom: 6px;
+ }
+ 
+ .phosh-wwan-indicator,
+ phosh-top-panel .indicators {
+-  font-size: 13px;
+-  font-weight: 800;
++  font-size: 14px;
++  font-weight: 600;
+   font-feature-settings: "tnum";
+ }
+ 
+@@ -42,6 +42,7 @@ phosh-top-panel .indicators {
+ 
+ phosh-top-panel .phosh-topbar-clock {
+   font-size: 16px;
++  font-weight: 600;
+ }
+ 
+ /* When moved to the left because of a cutout */
+@@ -51,7 +52,17 @@ phosh-top-panel .phosh-topbar-clock.left {
+ 
+ /* When moved to the right because of a cutout */
+ phosh-top-panel .phosh-topbar-clock.right {
+-  padding-left: 6px;
++  padding-left: 10px;
++}
++
++phosh-battery-info image {
++  -gtk-icon-transform: rotate(90deg);
++}
++
++phosh-battery-info label {
++  font-size: 14px;
++  font-weight: 800;
++  font-feature-settings: "tnum";
+ }
+ 
+ phosh-top-panel .phosh-topbar-date {
+@@ -396,6 +407,66 @@ phosh-app-grid {
+   color: @phosh_fg_color;
+ }
+ 
++.phosh-phone-home {
++  padding: 8px 10px 8px;
++}
++
++.phosh-phone-home-clock {
++  font-size: 60px;
++  letter-spacing: -2px;
++  font-weight: 300;
++  font-feature-settings: "tnum";
++}
++
++.phosh-phone-home-date {
++  font-size: 15px;
++  color: rgba(255,255,255,.78);
++  opacity: 0.9;
++}
++
++.phosh-phone-home-all-apps {
++  border-radius: 9999px;
++  padding: 7px 22px;
++  margin: 0 0 3px;
++  background: alpha(@phosh_bg_color,.42);
++}
++
++.phosh-phone-home-dock {
++  border-radius: 30px;
++  padding: 12px 4px;
++  border: 1px solid rgba(255,255,255,.10);
++  background: rgba(255,255,255,.10);
++}
++
++.phosh-phone-home-dock flowboxchild {
++  padding: 2px;
++}
++
++.phosh-phone-home-app-page {
++  padding: 12px 8px 0;
++}
++
++.phosh-phone-home-app-page phosh-app-grid-button button,
++.phosh-phone-home phosh-app-grid-button button {
++  font-size: 12px;
++  font-weight: 500;
++  min-height: 88px;
++  border-radius: 20px;
++}
++
++.phosh-phone-home-page-indicator {
++  opacity: 0.72;
++  font-size: 10px;
++  letter-spacing: 6px;
++  margin: 10px 0;
++  font-feature-settings: "tnum";
++}
++
++.phosh-phone-home-all-apps:active,
++.phosh-phone-home-all-apps:hover {
++  background: alpha(@phosh_bg_color,.7);
++}
++
+ phosh-app-grid separator {
+   background: @phosh_borders_color;
+   min-height: 2px;
+@@ -1284,3 +1355,18 @@ levelbar trough {
+ calendar:selected {
+   background-color: @theme_selected_bg_color;
+ }
++
++phosh-app-grid-button.home-dragging { opacity: .55; }
++phosh-app-grid-button.home-drop-target {
++  border-radius: 20px;
++  background: rgba(65,194,177,.24);
++  box-shadow: inset 0 0 0 2px rgba(65,194,177,.8);
++}
++
++.phone-navigation { padding: 2px 0; }
++.phone-navigation button {
++  border: none; box-shadow: none; background: transparent;
++  min-height: 30px; min-width: 44px; padding: 0 8px;
++  color: rgba(255,255,255,.86);
++}
++.phone-navigation button:hover { background: rgba(255,255,255,.10); }
+diff --git a/src/top-panel.h b/src/top-panel.h
+index 1e4748a..4443e4d 100644
+--- a/src/top-panel.h
++++ b/src/top-panel.h
+@@ -13,8 +13,8 @@
+ 
+ G_DECLARE_FINAL_TYPE (PhoshTopPanel, phosh_top_panel, PHOSH, TOP_PANEL, PhoshDragSurface)
+ 
+-#define PHOSH_TOP_BAR_HEIGHT 32
+-#define PHOSH_TOP_BAR_ICON_PIXEL_SIZE 16
++#define PHOSH_TOP_BAR_HEIGHT 40
++#define PHOSH_TOP_BAR_ICON_PIXEL_SIZE 24
+ /* Minimum padding of network and indicator box to the left / right screen edge */
+ #define PHOSH_TOP_BAR_MIN_PADDING 9
+ /* Minimum padding of network and indicator box to the left / right display cutouts */
+diff --git a/src/ui/app-grid-button.ui b/src/ui/app-grid-button.ui
+index 03767ea..f3a7974 100644
+--- a/src/ui/app-grid-button.ui
++++ b/src/ui/app-grid-button.ui
+@@ -16,6 +16,13 @@
+     <property name="propagation-phase">capture</property>
+     <signal name="pressed" handler="on_long_pressed" swapped="true"/>
+   </object>
++  <object class="GtkGestureDrag" id="home_drag">
++    <property name="widget">PhoshAppGridButton</property>
++    <property name="propagation-phase">capture</property>
++    <signal name="drag-update" handler="on_home_drag_update" swapped="true"/>
++    <signal name="drag-end" handler="on_home_drag_end" swapped="true"/>
++    <signal name="cancel" handler="on_home_drag_cancel" swapped="true"/>
++  </object>
+   <object class="GtkGestureMultiPress" id="right_gesture">
+     <property name="button">3</property>
+     <property name="widget">PhoshAppGridButton</property>
+diff --git a/src/ui/app-grid.ui b/src/ui/app-grid.ui
+index 02b3095..7f94e31 100644
+--- a/src/ui/app-grid.ui
++++ b/src/ui/app-grid.ui
+@@ -4,17 +4,122 @@
+   <requires lib="libhandy" version="1.8"/>
+   <template class="PhoshAppGrid" parent="GtkBox">
+     <property name="visible">1</property>
++    <property name="orientation">vertical</property>
+     <property name="hexpand">1</property>
+     <property name="vexpand">1</property>
+     <child>
+       <object class="HdyDeck" id="deck">
+         <property name="visible">1</property>
++        <property name="vexpand">1</property>
+         <property name="transition-type">2</property>
+         <property name="can-swipe-back">1</property>
++        <property name="can-swipe-forward">1</property>
++        <child>
++          <object class="GtkBox" id="phone_home_page">
++            <property name="visible">1</property>
++            <property name="orientation">vertical</property>
++            <property name="hexpand">1</property>
++            <property name="vexpand">1</property>
++            <property name="spacing">0</property>
++            <style>
++              <class name="phosh-phone-home"/>
++            </style>
++            <child>
++              <object class="GtkBox">
++                <property name="visible">1</property>
++                <property name="orientation">vertical</property>
++                <property name="halign">start</property>
++                <property name="spacing">0</property>
++                <property name="margin-start">24</property>
++                <property name="margin-top">38</property>
++                <property name="margin-bottom">12</property>
++                <child>
++                  <object class="GtkLabel" id="home_clock">
++                    <property name="visible">1</property>
++                    <property name="halign">start</property>
++                    <property name="label">--:--</property>
++                    <style><class name="phosh-phone-home-clock"/></style>
++                  </object>
++                </child>
++                <child>
++                  <object class="GtkLabel" id="home_date">
++                    <property name="visible">1</property>
++                    <property name="halign">start</property>
++                    <property name="label"> </property>
++                    <style><class name="phosh-phone-home-date"/></style>
++                  </object>
++                </child>
++              </object>
++            </child>
++            <child>
++              <object class="GtkBox">
++                <property name="visible">1</property>
++                <property name="vexpand">1</property>
++              </object>
++            </child>
++            <child>
++              <object class="GtkFlowBox" id="home_favs">
++                <property name="visible">1</property>
++                <property name="margin-start">12</property>
++                <property name="margin-end">12</property>
++                <property name="margin-bottom">10</property>
++                <property name="hexpand">1</property>
++                <property name="homogeneous">1</property>
++                <property name="min-children-per-line">4</property>
++                <property name="max-children-per-line">4</property>
++                <property name="selection-mode">none</property>
++                <property name="activate-on-single-click">0</property>
++                <property name="column-spacing">8</property>
++                <property name="row-spacing">12</property>
++              </object>
++            </child>
++            <child>
++              <object class="GtkLabel" id="home_page_indicator">
++                <property name="visible">1</property>
++                <property name="halign">center</property>
++                <property name="margin-top">6</property>
++                <property name="margin-bottom">6</property>
++                <property name="label">●</property>
++                <style><class name="phosh-phone-home-page-indicator"/></style>
++              </object>
++            </child>
++            <child>
++              <object class="GtkButton" id="btn_all_apps">
++                <property name="visible">0</property>
++                <property name="no-show-all">1</property>
++                <property name="halign">center</property>
++                <property name="relief">none</property>
++                <property name="label" translatable="yes">All Apps</property>
++                <signal name="clicked" handler="show_all_apps" object="PhoshAppGrid" swapped="yes"/>
++                <style><class name="phosh-phone-home-all-apps"/></style>
++              </object>
++            </child>
++          </object>
++          <packing>
++            <property name="name">phone_home</property>
++          </packing>
++        </child>
+         <child>
+           <object class="GtkBox">
+             <property name="visible">1</property>
+             <property name="orientation">vertical</property>
++            <child>
++              <object class="GtkBox">
++                <property name="visible">1</property>
++                <property name="margin-start">8</property>
++                <property name="margin-end">8</property>
++                <property name="margin-top">4</property>
++                <child>
++                  <object class="GtkButton" id="btn_home">
++                    <property name="visible">0</property>
++                    <property name="no-show-all">1</property>
++                    <property name="relief">none</property>
++                    <property name="label" translatable="yes">Home</property>
++                    <signal name="clicked" handler="show_home_page" object="PhoshAppGrid" swapped="yes"/>
++                  </object>
++                </child>
++              </object>
++            </child>
+             <child>
+               <object class="GtkBox">
+                 <property name="visible">1</property>
+@@ -294,5 +399,24 @@
+         </child>
+       </object>
+     </child>
++    <child>
++      <object class="GtkFlowBox" id="home_dock">
++        <property name="visible">1</property>
++        <property name="valign">end</property>
++        <property name="margin-start">8</property>
++        <property name="margin-end">8</property>
++        <property name="margin-top">6</property>
++        <property name="margin-bottom">18</property>
++        <property name="hexpand">1</property>
++        <property name="homogeneous">1</property>
++        <property name="min-children-per-line">4</property>
++        <property name="max-children-per-line">4</property>
++        <property name="selection-mode">none</property>
++        <property name="activate-on-single-click">0</property>
++        <property name="column-spacing">0</property>
++        <property name="row-spacing">0</property>
++        <style><class name="phosh-phone-home-dock"/></style>
++      </object>
++    </child>
+   </template>
+ </interface>
+diff --git a/src/ui/audio-settings.ui b/src/ui/audio-settings.ui
+index 3b7ef1b..2ccc50d 100644
+--- a/src/ui/audio-settings.ui
++++ b/src/ui/audio-settings.ui
+@@ -16,7 +16,7 @@
+               </object>
+             </child>
+             <child>
+-              <object class="GvcChannelBar" id="phone_vol_bar">
++              <object class="PhoshChannelBar" id="phone_vol_bar">
+                 <property name="visible">False</property>
+                 <property name="icon-name">call-start-symbolic</property>
+               </object>
+diff --git a/src/ui/overview.ui b/src/ui/overview.ui
+index fc2cfb4..70889b1 100644
+--- a/src/ui/overview.ui
++++ b/src/ui/overview.ui
+@@ -6,30 +6,71 @@
+     <property name="visible">1</property>
+     <property name="orientation">vertical</property>
+     <child>
+-      <object class="HdyCarousel" id="carousel_running_activities">
+-        <signal name="notify::n-pages" handler="on_n_pages_changed" object="PhoshOverview" swapped="yes"/>
+-        <signal name="page-changed" handler="on_page_changed" object="PhoshOverview" swapped="yes"/>
+-        <property name="spacing">18</property>
+-        <property name="margin-bottom">6</property>
+-        <property name="hexpand">1</property>
++      <object class="GtkStack" id="phone_views">
++        <property name="visible">1</property>
+         <property name="vexpand">1</property>
+-        <property name="reveal-duration">200</property>
+-        <property name="allow-long-swipes">1</property>
++        <property name="hexpand">1</property>
++        <property name="transition-type">crossfade</property>
++        <property name="transition-duration">180</property>
++        <child>
++          <object class="GtkEventBox" id="evbox_app_grid">
++            <property name="visible">1</property>
++            <child>
++              <object class="PhoshAppGrid" id="app_grid">
++                <signal name="app-launched" handler="on_app_launched" object="PhoshOverview" swapped="yes"/>
++                <property name="visible">1</property>
++              </object>
++            </child>
++          </object>
++          <packing><property name="name">home</property></packing>
++        </child>
++        <child>
++          <object class="HdyCarousel" id="carousel_running_activities">
++            <signal name="notify::n-pages" handler="on_n_pages_changed" object="PhoshOverview" swapped="yes"/>
++            <signal name="page-changed" handler="on_page_changed" object="PhoshOverview" swapped="yes"/>
++            <property name="spacing">18</property>
++            <property name="margin-bottom">6</property>
++            <property name="hexpand">1</property>
++            <property name="vexpand">1</property>
++            <property name="reveal-duration">200</property>
++            <property name="allow-long-swipes">1</property>
++          </object>
++          <packing><property name="name">recents</property></packing>
++        </child>
+       </object>
+     </child>
+     <child>
+-      <object class="GtkEventBox" id="evbox_app_grid">
++      <object class="GtkBox">
+         <property name="visible">1</property>
++        <property name="halign">center</property>
++        <property name="spacing">64</property>
++        <style><class name="phone-navigation"/></style>
++        <child>
++          <object class="GtkButton">
++            <property name="visible">1</property>
++            <property name="tooltip-text" translatable="yes">Home</property>
++            <signal name="clicked" handler="on_phone_home" object="PhoshOverview" swapped="yes"/>
++            <child><object class="GtkImage">
++              <property name="visible">1</property>
++              <property name="icon-name">go-home-symbolic</property>
++              <property name="pixel-size">20</property>
++            </object></child>
++          </object>
++        </child>
+         <child>
+-          <object class="PhoshAppGrid" id="app_grid">
+-            <signal name="app-launched" handler="on_app_launched" object="PhoshOverview" swapped="yes"/>
++          <object class="GtkButton" id="recent_button">
+             <property name="visible">1</property>
++            <property name="tooltip-text" translatable="yes">Recent Apps</property>
++            <signal name="clicked" handler="on_phone_recents" object="PhoshOverview" swapped="yes"/>
++            <child><object class="GtkImage">
++              <property name="visible">1</property>
++              <property name="icon-name">view-dual-symbolic</property>
++              <property name="pixel-size">20</property>
++            </object></child>
+           </object>
+         </child>
+       </object>
+     </child>
+-    <style>
+-      <class name="phosh-overview"/>
+-    </style>
++    <style><class name="phosh-overview"/></style>
+   </template>
+ </interface>
+diff --git a/src/ui/top-panel.ui b/src/ui/top-panel.ui
+index 2b45e03..d6a0d85 100644
+--- a/src/ui/top-panel.ui
++++ b/src/ui/top-panel.ui
+@@ -217,7 +217,7 @@
+                     <property name="valign">end</property>
+                     <property name="name">top-bar</property>
+                     <!-- PHOSH_TOP_PANEL_HEIGHT -->
+-                    <property name="height-request">32</property>
++                    <property name="height-request">40</property>
+                     <child>
+                       <object class="GtkBox" id="box_network">
+                         <property name="visible">1</property>
+@@ -325,7 +325,8 @@
+                             <child>
+                               <object class="PhoshBatteryInfo" id="batteryinfo">
+                                 <property name="visible">1</property>
+-                                <property name="pixel-size">16</property>
++                                <property name="pixel-size">24</property>
++                                <property name="show-detail">1</property>
+                               </object>
+                             </child>
+                           </object>
+@@ -399,45 +400,45 @@
+   </template>
+   <object class="PhoshWWanInfo" id="wwaninfo">
+     <property name="margin-end">8</property>
+-    <property name="pixel-size">16</property>
++    <property name="pixel-size">24</property>
+     <property name="show-detail">1</property>
+     <style>
+       <class name="phosh-wwan-indicator"/>
+     </style>
+   </object>
+   <object class="PhoshWifiInfo" id="wifiinfo">
+-    <property name="pixel-size">16</property>
++    <property name="pixel-size">24</property>
+     <property name="margin-end">8</property>
+   </object>
+   <object class="PhoshBtInfo" id="btinfo">
+-    <property name="pixel-size">16</property>
++    <property name="pixel-size">24</property>
+     <property name="margin-end">8</property>
+   </object>
+   <object class="PhoshVpnInfo" id="vpn_info">
+-    <property name="pixel-size">16</property>
++    <property name="pixel-size">24</property>
+     <property name="margin-end">8</property>
+   </object>
+   <object class="PhoshConnectivityInfo" id="connectivity_info">
+-    <property name="pixel-size">16</property>
++    <property name="pixel-size">24</property>
+     <property name="margin-end">8</property>
+   </object>
+   <object class="PhoshDockedInfo" id="docked_info">
+-    <property name="pixel-size">16</property>
++    <property name="pixel-size">24</property>
+     <property name="margin-end">8</property>
+   </object>
+   <object class="PhoshHksInfo" id="hks_info_mic">
+     <property name="device-type">mic</property>
+-    <property name="pixel-size">16</property>
++    <property name="pixel-size">24</property>
+   </object>
+   <object class="PhoshHksInfo" id="hks_info_camera">
+     <property name="device-type">camera</property>
+-    <property name="pixel-size">16</property>
++    <property name="pixel-size">24</property>
+   </object>
+   <object class="PhoshFeedbackInfo" id="feedback_info">
+-    <property name="pixel-size">16</property>
++    <property name="pixel-size">24</property>
+   </object>
+   <object class="PhoshLocationInfo" id="location_info">
+-    <property name="pixel-size">16</property>
++    <property name="pixel-size">24</property>
+   </object>
+   <object class="GtkGestureMultiPress" id="click_gesture">
+     <property name="widget">PhoshTopPanel</property>

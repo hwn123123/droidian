@@ -1,0 +1,15 @@
+{
+  "base": "http://releases.droidian.org/snapshots/next/debian/20261021T204401Z/pool/main/",
+  "packages": [
+    {
+      "file": "fonts-inter_4.1+ds1-4_all.deb",
+      "path": "f/fonts-inter/",
+      "sha256": "235b4f67ad5c4a870f13bf8c8cc649bb5d98fdeceebac15ca1aef8013abdda41"
+    },
+    {
+      "file": "papirus-icon-theme_20260801-1_all.deb",
+      "path": "p/papirus-icon-theme/",
+      "sha256": "cb0ff79d4d17f4dfec77f5852256fc5bb661b5ddf315e86df19a8a5332da3542"
+    }
+  ]
+}

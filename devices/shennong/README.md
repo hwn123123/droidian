@@ -91,6 +91,44 @@ The system locale is `zh_CN.UTF-8`, with `LANGUAGE=zh_CN:zh` for translated
 applications. These are image defaults in `/etc/default/locale`; there is no
 login or boot task forcing the language/timezone back after a user changes it.
 
+### Native phone desktop
+
+The phone home is an isolated patch against Droidian Phosh revision
+`bee1861911b0cf75f50ab00cea5a84ed98d9c32f`, not a second launcher or a startup
+script. Its Debian version is the upstream version plus `+shennong3`.
+Build it inside a matching arm64 Droidian `next` build environment:
+
+```sh
+sudo apt-get install build-essential devscripts equivs
+sudo mk-build-deps -ir -t 'apt-get -y --no-install-recommends' \
+  -Pnodoc,nocheck /path/to/matching-phosh/debian/control
+sudo bash devices/shennong/tools/build-phosh.sh
+```
+
+Keep the repository and its output directory accessible inside the build
+environment. The helper pins the shell and both subprojects, applies the
+device patch and exports four runtime packages to `out/shennong/ui-packages/`.
+Run this before `build-device-image.sh`; offline image preparation installs
+these packages and checks the appearance inputs against `ui-packages.json`.
+
+The main page has a clock and favorite launchers. Swipe left for the remaining
+apps and right to return. The first four native Phosh favorites form a fixed
+dock; the rest appear on the main page. Long-press and drag an icon onto another
+to change its order. Long-press and release in place opens Phosh's own app menu
+for favorites, folders and available software actions. App order is stored in
+`mobi.phosh.shell.home app-order`; favorites remain in `sm.puri.phosh favorites`.
+New applications follow the saved order; uninstalled applications disappear
+through the existing app model. Home and recent tasks are separate views, so
+running app thumbnails do not squeeze the desktop. Tap the persistent bottom
+handle to return from an app to the home page. The native task carousel,
+notifications, quick settings, lockscreen and compositor remain in use.
+
+The packaged GSettings overrides supply a dark teal appearance, Papirus icons,
+Inter text with the distribution's Noto Chinese fallback and the Tide wallpaper.
+They are defaults: later changes in Phosh/GNOME settings take precedence and
+are not reset at login or boot. Wallpaper provenance and its generation prompt
+are included alongside the asset in the adaptation package.
+
 Build the pinned 6.1.138 source with the captured stock config:
 
 ```sh

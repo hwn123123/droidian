@@ -61,6 +61,9 @@ depmod -b "$root" "$release"
 
 # Build the latest config package, so changes made while rootfs downloads
 # were in progress are included reproducibly in the final device image.
+ui_args=(--root "$root")
+[ "${SHENNONG_OFFLINE:-0}" != 1 ] || ui_args+=(--offline)
+python3 "$here/install-ui-packages.py" "${ui_args[@]}"
 work=$(mktemp -d "$repo/out/shennong/device-config.XXXXXX")
 cp -a "$here/../packages/adaptation-xiaomi-shennong" "$work/source"
 (cd "$work/source" && dpkg-buildpackage --no-sign -b)
