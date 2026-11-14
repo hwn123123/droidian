@@ -220,6 +220,28 @@ With the same library path, a direct QMS launch passed the previous immediate
 linker failure and remained alive for the five-second diagnostic window. The
 next boot must still confirm service registration and modem QoS behavior.
 
+Other boot errors are confirmed gaps and remain visible for follow-up:
+
+* `minetd` cannot resolve the Xiaomi `miwill_genl` generic-netlink family.
+  The current kernel exposes no provider for that family. The phone's cellular
+  bearer is handled by the separate oFono/RMNET path; this vendor extension is
+  not emulated with fake counters or routes.
+* The stock camera provider exits because CamX requires
+  `/sys/kernel/camera/subparts_info`, which the running kernel does not export.
+  Creating a placeholder would hide the missing camera/kernel contract, so no
+  synthetic sysfs file is installed.
+* `droidian-fpd` waits for the legacy fingerprint HIDL 2.1 service, while this
+  vendor image registers the AIDL `IFingerprint/default` service. The daemon
+  fails before exposing fingerprint support; an AIDL-to-D-Bus bridge remains
+  unimplemented.
+* The Android vendor init requests `INwMgr`, `IQHDC` and `IQesdSys` AIDL
+  services that are absent from the imported image. Their intended vendor
+  implementations are still unidentified.
+* Android vendor task profiles still reference cgroup-v1 paths (`blkio`,
+  `cpuset` and `cpuctl`) unavailable in this host's unified hierarchy. The
+  attempted cgroup-v2 profile substitution was withdrawn because Android's
+  `JoinCgroup` action ignored it; these warnings are not filtered.
+
 ### Vendor RPC dependencies and log audit
 
 ADSP being online does not mean the optional FastRPC transport is available.
