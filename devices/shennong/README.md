@@ -222,14 +222,6 @@ next boot must still confirm service registration and modem QoS behavior.
 
 Other boot errors are confirmed gaps and remain visible for follow-up:
 
-* `minetd` cannot resolve the Xiaomi `miwill_genl` generic-netlink family.
-  The current kernel exposes no provider for that family. The phone's cellular
-  bearer is handled by the separate oFono/RMNET path; this vendor extension is
-  not emulated with fake counters or routes.
-* The stock camera provider exits because CamX requires
-  `/sys/kernel/camera/subparts_info`, which the running kernel does not export.
-  Creating a placeholder would hide the missing camera/kernel contract, so no
-  synthetic sysfs file is installed.
 * `droidian-fpd` waits for the legacy fingerprint HIDL 2.1 service, while this
   vendor image registers the AIDL `IFingerprint/default` service. The daemon
   fails before exposing fingerprint support; an AIDL-to-D-Bus bridge remains
@@ -241,6 +233,38 @@ Other boot errors are confirmed gaps and remain visible for follow-up:
   `cpuset` and `cpuctl`) unavailable in this host's unified hierarchy. The
   attempted cgroup-v2 profile substitution was withdrawn because Android's
   `JoinCgroup` action ignored it; these warnings are not filtered.
+
+### Network and camera module initialization
+
+Adaptation 0.1.26 corrects two missing stock module loads. The previously
+reported `miwill_genl` and camera `subparts_info` failures were caused by
+unloaded modules already present in the image, rather than absent kernel
+implementations. The stock modules passed the running kernel's normal loader;
+no force-loading or version-check bypass was used.
+
+`usr/lib/modules-load.d/shennong-network.conf` uses systemd's existing module
+loader to load `miwill` then `minet`, in the captured vendor order. On-device,
+`minetd` resolved the real generic-netlink family and stopped respawning.
+This restores the vendor extension's transport; the normal oFono/RMNET bearer
+and NetworkManager continue to own the mobile connection.
+
+`shennong-camera.service` loads `camera` with kmod's dependency resolution after
+the vendor/ADSP initialization stages and before Android starts its provider.
+It checks the driver's real `/sys/kernel/camera/subparts_info` export. Android
+mounting wants this stage without requiring its success, so a camera failure
+remains visible without blocking the desktop, USB or telephony. No synthetic
+sysfs entry or camera watchdog is installed.
+
+The live module load created the camera media/subdevice nodes, removed the
+provider's previous CamX initialization crash, and let CameraProviderManager
+report 11 camera devices. This count includes vendor logical/device variants;
+it does not mean 11 physical lenses. Opening Droidian Camera subsequently
+reached live capture requests but crashed the vendor provider in
+`libmialgo_sd.so` on its `pAlgoSDStart` thread. The provider restarted and
+registered again after the app was closed. This is a distinct unresolved
+capture-path failure; camera support is not complete, and no algorithm or
+error reporting was disabled to conceal it. Cold-boot ordering of the new
+unit also remains to be verified on a future normal boot.
 
 ### Vendor RPC dependencies and log audit
 

@@ -1,3 +1,12 @@
+adaptation-xiaomi-shennong (0.1.26) unstable; urgency=medium
+
+  * Load the captured Xiaomi miwill/minet modules through systemd-modules-load
+    so minetd can connect to its real generic-netlink family without respawning.
+  * Initialize the stock camera module and its dependencies before Android's
+    mount/startup stage, and verify its real subparts_info interface is present.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 15:45:00 +0800
+
 adaptation-xiaomi-shennong (0.1.25) unstable; urgency=medium
 
   * Scope the captured Tethering APEX dependency path to the stock QMS service

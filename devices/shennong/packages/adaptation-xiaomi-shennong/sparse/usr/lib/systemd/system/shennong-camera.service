@@ -1,0 +1,15 @@
+[Unit]
+Description=Stock Qualcomm camera kernel interface for the Android Camera HAL
+Requires=shennong-vendor.service
+After=shennong-vendor.service shennong-adsp.service
+Before=android-mount.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/modprobe camera
+ExecStartPost=/usr/bin/test -r /sys/kernel/camera/subparts_info
+RemainAfterExit=yes
+TimeoutStartSec=40
+
+[Install]
+WantedBy=multi-user.target
