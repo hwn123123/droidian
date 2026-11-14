@@ -64,6 +64,7 @@ depmod -b "$root" "$release"
 ui_args=(--root "$root")
 [ "${SHENNONG_OFFLINE:-0}" != 1 ] || ui_args+=(--offline)
 python3 "$here/install-ui-packages.py" "${ui_args[@]}"
+bash "$here/install-sensor-packages.sh" "$root"
 work=$(mktemp -d "$repo/out/shennong/device-config.XXXXXX")
 cp -a "$here/../packages/adaptation-xiaomi-shennong" "$work/source"
 (cd "$work/source" && dpkg-buildpackage --no-sign -b)
@@ -87,7 +88,7 @@ radio_packages=("$repo/out/shennong/telephony-packages/"ofono-binder-plugin_*+sh
 install -m644 "${radio_packages[0]}" "$root/tmp/shennong-ofono.deb"
 chroot "$root" dpkg -i /tmp/shennong-ofono.deb
 rm "$root/tmp/shennong-ofono.deb"
-bridge_packages=("$repo/out/shennong/telephony-packages/"ofono2mm_*+shennong15_all.deb)
+bridge_packages=("$repo/out/shennong/telephony-packages/"ofono2mm_*+shennong16_all.deb)
 [ "${#bridge_packages[@]}" = 1 ] && [ -s "${bridge_packages[0]}" ] || {
     echo 'Build the device modem bridge with tools/build-ofono2mm.sh first.' >&2
     exit 1

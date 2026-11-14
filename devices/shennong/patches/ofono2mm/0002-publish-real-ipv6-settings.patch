@@ -1,0 +1,95 @@
+From: Ning <hwn123123@users.noreply.github.com>
+Subject: [PATCH] Publish only IP families actually configured by oFono
+
+--- a/ofono2mm/mm_bearer.py
++++ b/ofono2mm/mm_bearer.py
+@@ -33,10 +33,10 @@
+             "Suspended": Variant('b', False),
+             "Multiplexed": Variant('b', True),
+             "Ip4Config": Variant('a{sv}', {
+-                "method": Variant('u', 3) # on runtime dhcp MM_BEARER_IP_METHOD_DHCP
++                "method": Variant('u', 0) # UNKNOWN until oFono reports this IP family
+             }),
+             "Ip6Config": Variant('a{sv}', {
+-                "method": Variant('u', 3) # on runtime dhcp MM_BEARER_IP_METHOD_DHCP
++                "method": Variant('u', 0) # UNKNOWN until oFono reports this IP family
+             }),
+             "ReloadStatsSupported": Variant('b', False),
+             "IpTimeout": Variant('u', 0),
+@@ -149,10 +149,46 @@
+             "Properties": Variant('a{sv}', properties)
+         })
+ 
+-    def set_context(self, ofono_ctx):
++    def set_context(self, ofono_ctx, properties=None):
+         self.ofono_ctx = ofono_ctx
+         ofono_ctx_interface = self.ofono_client['ofono_context'][ofono_ctx]['org.ofono.ConnectionContext']
+         ofono_ctx_interface.on_property_changed(self.ofono_context_changed)
++        if properties is not None:
++            self.ofono_context_changed('IPv6.Settings',
++                properties.get('IPv6.Settings', Variant('a{sv}', {})))
++
++    def update_ipv6_settings(self, value):
++        # An IPv4-only context must not advertise IPv6 DHCP to NetworkManager.
++        # Rebuild the dictionary so loss of IPv6 also drops old DNS and routes.
++        config = {'method': Variant('u', 0)}
++        settings = value.value
++        if settings.get('Address', Variant('s', '')).value:
++            try:
++                address = str(ipaddress.IPv6Address(settings['Address'].value))
++                prefix = settings['PrefixLength'].value
++                if not isinstance(prefix, int) or not 0 <= prefix <= 128:
++                    raise ValueError('invalid IPv6 prefix')
++                config.update(method=Variant('u', 2), address=Variant('s', address),
++                              prefix=Variant('u', prefix))
++                gateway = settings.get('Gateway', Variant('s', '')).value
++                if gateway:
++                    config['gateway'] = Variant('s', str(ipaddress.IPv6Address(gateway)))
++                for index, dns in enumerate(settings.get(
++                        'DomainNameServers', Variant('as', [])).value[:3], 1):
++                    config['dns' + str(index)] = Variant('s', str(ipaddress.IPv6Address(dns)))
++            except (KeyError, ValueError, TypeError) as error:
++                Logger.error('Invalid oFono IPv6 settings: %s', error)
++                config = {'method': Variant('u', 0)}
++        self.props['Ip6Config'] = Variant('a{sv}', config)
++        if config['method'].value and 'Interface' in settings:
++            interface = settings['Interface'].value
++            self.props['Interface'] = Variant('s', interface)
++            self.emit_properties_changed({'Interface': interface})
++            port = [interface, ModemManagerPortType.NET]
++            if port not in self.mm_modem.props['Ports'].value:
++                self.mm_modem.props['Ports'].value.append(port)
++                self.mm_modem.emit_properties_changed({'Ports': self.mm_modem.props['Ports'].value})
++        self.emit_properties_changed({'Ip6Config': config})
+ 
+     async def update_context(self):
+         if 'org.ofono.ConnectionManager' not in self.ofono_interfaces:
+@@ -218,6 +254,8 @@
+             self.props['Connected'] = value
+             self.emit_properties_changed({'Connected': value.value})
+             self.mm_modem.set_props()
++        elif propname == "IPv6.Settings":
++            self.update_ipv6_settings(value)
+         elif propname == "Settings":
+             if 'Interface' in value.value:
+                 self.props['Interface'] = value.value['Interface']
+--- a/ofono2mm/mm_modem.py
++++ b/ofono2mm/mm_modem.py
+@@ -325,7 +325,7 @@
+ 
+                 ofono_ctx_interface = self.ofono_client["ofono_context"][ctx[0]]["org.ofono.ConnectionContext"]
+                 ofono_ctx_interface.on_property_changed(self.ofono_context_changed)
+-                mm_bearer_interface.set_context(ctx[0])
++                mm_bearer_interface.set_context(ctx[0], ctx[1])
+                 self.bus.export(f'/org/freedesktop/ModemManager/Bearer/{bearer_i}', mm_bearer_interface)
+                 self.props['Bearers'].value.append(f'/org/freedesktop/ModemManager/Bearer/{bearer_i}')
+                 self.bearers[f'/org/freedesktop/ModemManager/Bearer/{bearer_i}'] = mm_bearer_interface
+@@ -383,7 +383,7 @@
+ 
+             ofono_ctx_interface = self.ofono_client["ofono_context"][path]['org.ofono.ConnectionContext']
+             ofono_ctx_interface.on_property_changed(self.ofono_context_changed)
+-            mm_bearer_interface.set_context(path)
++            mm_bearer_interface.set_context(path, properties)
+             self.bus.export(f'/org/freedesktop/ModemManager/Bearer/{bearer_i}', mm_bearer_interface)
+             self.props['Bearers'].value.append(f'/org/freedesktop/ModemManager/Bearer/{bearer_i}')
+             self.bearers[f'/org/freedesktop/ModemManager/Bearer/{bearer_i}'] = mm_bearer_interface

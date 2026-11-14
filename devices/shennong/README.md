@@ -444,7 +444,7 @@ The helper pins upstream commit `9b9e8bd2ffc8a6ba482d6daf7171fd84ba82c3b8`,
 runs its tests and builds a `+shennong3` Debian package. Also run
 `sudo bash devices/shennong/tools/build-ofono2mm.sh` to package the isolated
 address-prefix, network-port and late SIM-property refresh fixes against the pinned
-upstream modem bridge. It produces a `+shennong15` package. Device image preparation
+upstream modem bridge. It produces a `+shennong16` package. Device image preparation
 requires both packages.
 For a rebuild with inputs already cached, set `SHENNONG_OFFLINE=1`; the helper
 still verifies the archive signature and all cached package hashes.
@@ -662,6 +662,35 @@ Denial is stopped and disabled. USB/SSH and cellular were still connected.
 The Denial changes remain isolated in its own fork and do not become this
 device image's default desktop. No slot A, recovery or partition changes were
 made for this desktop evaluation.
+
+The 2026-11-14 log audit also corrected the bridge's default IPv6 DHCP claim.
+The `+shennong16` bridge publishes no IPv6 configuration for an IPv4-only
+context and translates actual `IPv6.Settings` when supplied by oFono. Four
+regressions cover IPv4-only publication, existing IPv6 contexts, loss of IPv6
+and malformed settings. On the phone, NetworkManager reconnected over the
+actual RMNET interface, HTTP returned 204, and the repeating `linklocal6`
+warning stopped. Real IPv6 connectivity has not been tested.
+
+Sensorfw uses upstream AIDL support at
+`a1af4b071b7f7de2c95233ad886c6652afbb1c6e`, retaining Droidian's Qt6 packaging
+and service ordering from `feafda86681933e599c742d6b6bcef0dddd0e73f`.
+Build `tools/build-sensorfw.sh` and `tools/build-sensor-proxy.sh` inside the
+matching arm64 Droidian build environment before preparing an image.
+`prepare-device-root.sh` installs these native packages automatically,
+including the Qt5 transitional packages required by the existing adaptation.
+The proxy rejects invalid sensor sessions instead of reporting them as usable;
+its socket adapter bounds partial reads, waits for incoming fragments and
+avoids joining a thread that was never started. The native socket regression
+uses real fragmented Unix socket packets and runs during package building.
+
+The AIDL connection now works, but the stock HAL currently returns only its
+dynamic-sensor manager and vendor touch sensor. Accelerometer, ambient light,
+proximity and compass therefore remain unavailable; the DSP/FastRPC path
+still needs repair. This is not a completed physical-sensor adaptation.
+The audit also confirmed outstanding NFC/fingerprint interface mismatches,
+the camera provider's `CamX::init` crash, missing Android tethering APEX
+dependencies for `qms`, and Android cgroup-profile errors. These failures
+remain visible in the logs; no logging filter was added to hide them.
 
 This remains a development port. These cellular checks cover the inserted SIM
 and IPv4 data. Wi-Fi Internet access and basic speaker/microphone operation

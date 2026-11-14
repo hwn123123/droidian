@@ -1,0 +1,22 @@
+From: Ning <hwn123123@users.noreply.github.com>
+Subject: [PATCH] Wait for incoming bytes during partial synchronous reads
+
+--- a/sensorfw-core/socketreader.cpp
++++ b/sensorfw-core/socketreader.cpp
+@@ -117,10 +117,12 @@
+         {
+             if(!retry)
+                 return false;
+-            struct timespec ts;
+-            ts.tv_sec = 0;
+-            ts.tv_nsec = 100000000;
+-            nanosleep( &ts, NULL );
++            // Synchronous reads must pull newly arrived bytes into Qt's
++            // socket buffer; sleeping alone never advances its notifier.
++            socket_->waitForReadyRead(100);
++            if (socket_->state() == QLocalSocket::UnconnectedState &&
++                    !socket_->bytesAvailable())
++                return false;
+             --retry;
+             continue;
+         }

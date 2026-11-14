@@ -34,7 +34,7 @@ if 'feedd6c' not in base['version']:
 archive = inputs / 'packages' / Path(base['filename']).name
 if hashlib.sha256(archive.read_bytes()).hexdigest() != base['sha256']:
     raise SystemExit('Upstream bridge package checksum mismatch')
-version = base['version'] + '+shennong15'
+version = base['version'] + '+shennong16'
 out = repo / 'out/shennong/telephony-packages'
 out.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='shennong-ofono2mm-') as temporary:

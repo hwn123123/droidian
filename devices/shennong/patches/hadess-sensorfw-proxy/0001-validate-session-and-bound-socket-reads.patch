@@ -1,0 +1,142 @@
+From: Ning <hwn123123@users.noreply.github.com>
+Subject: [PATCH] Reject unavailable sessions and bound partial sensor reads
+
+--- a/sensorfw-core/sensorfw_common.h
++++ b/sensorfw-core/sensorfw_common.h
+@@ -72,7 +72,7 @@
+     HandlerRegistration dbus_signal_handler_registration;
+     PluginType m_plugin;
+     pid_t m_pid;
+-    int m_sessionid;
++    int m_sessionid = -1;
+     bool m_running = false;
+ };
+ }
+--- a/sensorfw-core/sensorfw_common.cpp
++++ b/sensorfw-core/sensorfw_common.cpp
+@@ -48,12 +48,17 @@
+         throw std::runtime_error("Could not create sensorfw backend");
+ 
+     request_sensor();
++    if (m_sessionid < 0)
++        throw std::runtime_error("Sensorfw did not provide a valid sensor session");
+ 
+     log->log(log_tag, "Got plugin_string %s", plugin_string());
+     log->log(log_tag, "Got plugin_interface %s", plugin_interface());
+     log->log(log_tag, "Got plugin_path %s", plugin_path());
+ 
+-    m_socket->initiateConnection(m_sessionid);
++    if (!m_socket->initiateConnection(m_sessionid)) {
++        release_sensor();
++        throw std::runtime_error("Could not connect to the Sensorfw data socket");
++    }
+ }
+ 
+ repowerd::Sensorfw::~Sensorfw()
+@@ -61,7 +66,8 @@
+     stop();
+     release_sensor();
+     m_socket->dropConnection();
+-    read_loop.join();
++    if (read_loop.joinable())
++        read_loop.join();
+ }
+ 
+ const char* repowerd::Sensorfw::plugin_string() const
+--- a/sensorfw-core/socketreader.cpp
++++ b/sensorfw-core/socketreader.cpp
+@@ -44,6 +44,9 @@
+ 
+ bool SocketReader::initiateConnection(int sessionId)
+ {
++    if (sessionId < 0)
++        return false;
++
+     if (socket_ != NULL) {
+         qDebug() << "attempting to initiate connection on connected socket";
+         return false;
+@@ -59,7 +62,7 @@
+ 
+     socket_->connectToServer(SOCKET_NAME, QIODevice::ReadWrite);
+ 
+-    if (!(socket_->serverName().size())) {
++    if (!socket_->waitForConnected(1000)) {
+         qDebug() << socket_->errorString();
+         return false;
+     }
+@@ -68,9 +71,7 @@
+         qDebug() << "[SOCKETREADER]: SessionId write failed: " << socket_->errorString();
+     }
+     socket_->flush();
+-    readSocketTag();
+-
+-    return true;
++    return readSocketTag();
+ }
+ 
+ bool SocketReader::dropConnection()
+@@ -97,18 +98,21 @@
+ bool SocketReader::readSocketTag()
+ {
+     char foo;
+-    socket_->waitForReadyRead();
++    if (!socket_->bytesAvailable() && !socket_->waitForReadyRead(1000))
++        return false;
+     tagRead_ = read(&foo, 1);
+-    return true;
++    return tagRead_;
+ }
+ 
+ bool SocketReader::read(void* buffer, int size)
+ {
++    if (!socket_ || !buffer || size <= 0)
++        return false;
+     int bytesRead = 0;
+     int retry = 100;
+     while(bytesRead < size)
+     {
+-        int bytes = socket_->read((char *)buffer + bytesRead, size);
++        int bytes = socket_->read((char *)buffer + bytesRead, size - bytesRead);
+         if(bytes == 0)
+         {
+             if(!retry)
+--- a/sensorfw-core/socketreader.h
++++ b/sensorfw-core/socketreader.h
+@@ -297,15 +297,19 @@
+         socket_->readAll();
+         return false;
+     }
++    if(count == 0)
++        return false;
+     if(count > 1000)
+     {
+         qWarning() << "Too many samples waiting in socket. Flushing it to empty";
+         socket_->readAll();
+         return false;
+     }
+-    values.resize(values.size() + count);
+-    if(!read((void*)values.data(), sizeof(T) * count))
++    const int offset = values.size();
++    values.resize(offset + count);
++    if(!read((void*)(values.data() + offset), sizeof(T) * count))
+     {
++        values.resize(offset);
+         qWarning() << "Error occured while reading data from socket: " << socket_->errorString();
+         socket_->readAll();
+         return false;
+--- a/sensorfw-core/sensorfw_orientation_sensor.cpp
++++ b/sensorfw-core/sensorfw_orientation_sensor.cpp
+@@ -66,10 +66,7 @@
+ void repowerd::SensorfwOrientationSensor::data_recived_impl()
+ {
+     QVector<PoseData> values;
+-    repowerd::OrientationData output;
+-    if(m_socket->read<PoseData>(values)) {
+-        output = (repowerd::OrientationData) values[0].orientation_;
+-    }
+-
+-    handler(output);
++    if (!m_socket->read<PoseData>(values))
++        return;
++    handler(static_cast<repowerd::OrientationData>(values[0].orientation_));
+ }
