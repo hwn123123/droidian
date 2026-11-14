@@ -1,0 +1,2 @@
+# Captured /vendor/etc/ueventd.rc: /dev/nq-nci 0660 nfc nfc (AID 1027).
+KERNEL=="nq-nci", OWNER="nfc", GROUP="android_nfc", MODE="0660"

@@ -183,6 +183,33 @@ With adaptation 0.1.20, a fresh boot initialized the controller in about four
 seconds, kept the radio off, and recreated the captured device permissions
 without manual commands. The native power on/off controls also passed.
 
+### Native NFC transport
+
+The stock device tree selects `qcom,sn-nci`. The corresponding captured
+`nxp-nci` module is loaded by `shennong-nfc.service` after vendor initialization
+and before Android init. Native udev retains `/dev/nq-nci` ownership and mode
+from the captured `/vendor/etc/ueventd.rc` (AID 1027, mode 0660). This restores
+the standard `android.hardware.nfc.INfc/default` service, which was missing
+when its device node was unavailable.
+
+Run `tools/build-nfc-plugin.sh` in the matching arm64 Droidian build environment
+before preparing a device image. It builds upstream AIDL support at
+`ee270922a39d3730226936d7e78896dd508400be` with Droidian packaging from
+`81e7c482b06914a2f610b409b602544335cfc882`. The image preparation installs the
+package, and the native nfcd drop-in waits for the actual AIDL interface.
+No Android framework replacement or independent NFC daemon was introduced.
+
+On-device checks created `/nfc0`, received the controller's NCI 2.0 reset and
+initialization replies, and ran `ndef-read` to its waiting-for-tag state.
+Native power on/off also worked; RF power was returned to off after checking.
+Physical tag reading/writing and card emulation have not been validated.
+Ordinary reboots with adaptations 0.1.23 and 0.1.24 recreated the device node with its
+correct permissions, registered the AIDL HAL and started nfcd automatically;
+the RF remained off. Phosh, USB/SSH and cellular returned, and an HTTP request
+over the restored mobile connection returned 204.
+The final 0.1.24 boot also confirmed that the withdrawn task-profile overlay
+was absent from both the host adaptation directory and Android's vendor view.
+
 ### Vendor RPC dependencies and log audit
 
 ADSP being online does not mean the optional FastRPC transport is available.
@@ -687,10 +714,18 @@ The AIDL connection now works, but the stock HAL currently returns only its
 dynamic-sensor manager and vendor touch sensor. Accelerometer, ambient light,
 proximity and compass therefore remain unavailable; the DSP/FastRPC path
 still needs repair. This is not a completed physical-sensor adaptation.
-The audit also confirmed outstanding NFC/fingerprint interface mismatches,
-the camera provider's `CamX::init` crash, missing Android tethering APEX
-dependencies for `qms`, and Android cgroup-profile errors. These failures
-remain visible in the logs; no logging filter was added to hide them.
+The audit also confirmed the fingerprint interface mismatch, the camera
+provider's `CamX::init` crash, missing Android tethering APEX dependencies for
+`qms`, and Android cgroup-profile errors. The separate NFC interface repair
+is described above; physical NFC tag operations still need validation.
+
+An unpublished `NormalIoPriority` trial returned success from `settaskprofile`,
+but boot logs and the matching Android library source showed that v2
+`JoinCgroup` actions were ignored. It was therefore withdrawn from the source,
+phone and image; successful return codes alone are not a sufficient test.
+The legacy blkio and camera CPU/cpuset/memory profile compatibility remains
+unresolved. No cgroup files were mocked, host controller settings changed,
+or logging filters added.
 
 This remains a development port. These cellular checks cover the inserted SIM
 and IPv4 data. Wi-Fi Internet access and basic speaker/microphone operation

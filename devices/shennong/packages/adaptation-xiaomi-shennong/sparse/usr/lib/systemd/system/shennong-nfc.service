@@ -1,0 +1,16 @@
+[Unit]
+Description=Shennong stock NXP NFC transport
+Requires=shennong-vendor.service
+After=shennong-vendor.service
+Before=lxc@android.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/modprobe nxp-nci
+ExecStart=/usr/bin/udevadm settle --timeout=10
+ExecStart=/usr/bin/test -c /dev/nq-nci
+RemainAfterExit=yes
+TimeoutStartSec=20
+
+[Install]
+WantedBy=multi-user.target

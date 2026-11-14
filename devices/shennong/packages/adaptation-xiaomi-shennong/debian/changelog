@@ -1,3 +1,13 @@
+adaptation-xiaomi-shennong (0.1.24) unstable; urgency=medium
+
+  * Load the stock NXP NFC driver before the Android HAL starts and retain
+    its captured device-node ownership through native udev rules.
+  * Select the actual AIDL NFC service for the native daemon.
+  * Remove an unpublished cgroup task-profile trial: the Android library
+    ignored its v2 JoinCgroup action despite reporting successful application.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 13:00:00 +0800
+
 adaptation-xiaomi-shennong (0.1.21) unstable; urgency=medium
 
   * Match the captured ODM permissions for the display feature device.

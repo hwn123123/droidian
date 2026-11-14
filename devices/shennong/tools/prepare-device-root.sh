@@ -65,6 +65,7 @@ ui_args=(--root "$root")
 [ "${SHENNONG_OFFLINE:-0}" != 1 ] || ui_args+=(--offline)
 python3 "$here/install-ui-packages.py" "${ui_args[@]}"
 bash "$here/install-sensor-packages.sh" "$root"
+bash "$here/install-nfc-plugin.sh" "$root"
 work=$(mktemp -d "$repo/out/shennong/device-config.XXXXXX")
 cp -a "$here/../packages/adaptation-xiaomi-shennong" "$work/source"
 (cd "$work/source" && dpkg-buildpackage --no-sign -b)
@@ -117,7 +118,8 @@ for path in "$root/etc/ssh/ssh_host_"*; do [ ! -f "$path" ] || rm "$path"; done
 rm -f "$root/etc/systemd/system/sysinit.target.wants/shennong-usb-network.service"
 systemctl --root="$root" enable shennong-vendor.service shennong-touch.service \
     shennong-adsp.service shennong-graphics.service shennong-usb-network.service \
-    shennong-ssh-hostkeys.service shennong-wifi.service shennong-audio.service ssh.service phosh.service lxc@android.service
+    shennong-ssh-hostkeys.service shennong-wifi.service shennong-audio.service \
+    shennong-nfc.service nfcd.service ssh.service phosh.service lxc@android.service
 systemctl --root="$root" set-default graphical.target
 chroot "$root" usermod -a -G video,render droidian
 systemctl --root="$root" mask hybris-usb.service mobian-usb-gadget.service \
