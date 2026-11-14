@@ -6,7 +6,7 @@ repo=$(cd "$here/../../.." && pwd)
 out=${SHENNONG_SETTINGS_OUT:-$repo/out/shennong/settings-packages}
 cache=${SHENNONG_SETTINGS_CACHE:-$repo/out/shennong/settings-source-cache}
 revision=feb760d44e450f8284059ae1f1a5e4831c710c64
-version=1:50.1-1~git20260527223353.feb760d.next.gnome.50+shennong3
+version=1:50.1-1~git20260527223353.feb760d.next.gnome.50+shennong4
 archive_version=${version#*:}
 [[ $(dpkg --print-architecture) == arm64 ]]
 mkdir -p "$out" "$cache"

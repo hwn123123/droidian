@@ -1,0 +1,171 @@
+diff --git a/shell/cc-window.c b/shell/cc-window.c
+index 3a47083..a554b88 100644
+--- a/shell/cc-window.c
++++ b/shell/cc-window.c
+@@ -511,17 +511,137 @@ search_entry_activate_cb (CcWindow *self)
+   gtk_search_bar_set_search_mode (self->search_bar, !changed);
+ }
+ 
++/* Follow the visible page hierarchy, rather than the desktop panel history.
++ * Native navigation pages retain control over whether they can be popped. */
++static gboolean
++pop_visible_navigation (GtkWidget *widget)
++{
++  GtkWidget *child;
++
++  if (!gtk_widget_get_mapped (widget))
++    return FALSE;
++
++  if (ADW_IS_NAVIGATION_VIEW (widget))
++    {
++      AdwNavigationView *view = ADW_NAVIGATION_VIEW (widget);
++      AdwNavigationPage *page = adw_navigation_view_get_visible_page (view);
++
++      if (!page)
++        return FALSE;
++      if (pop_visible_navigation (GTK_WIDGET (page)))
++        return TRUE;
++      if (!adw_navigation_view_get_previous_page (view, page))
++        return FALSE;
++      if (adw_navigation_page_get_can_pop (page))
++        adw_navigation_view_pop (view);
++      return TRUE;
++    }
++
++  for (child = gtk_widget_get_last_child (widget); child;
++       child = gtk_widget_get_prev_sibling (child))
++    if (pop_visible_navigation (child))
++      return TRUE;
++
++  return FALSE;
++}
++
++static void
++go_back_mobile (CcWindow *self)
++{
++  AdwDialog *dialog;
++  GtkWidget *focus, *popover;
++
++  dialog = adw_application_window_get_visible_dialog (ADW_APPLICATION_WINDOW (self));
++  if (dialog)
++    {
++      if (!pop_visible_navigation (GTK_WIDGET (dialog)))
++        adw_dialog_close (dialog);
++      return;
++    }
++
++  focus = gtk_window_get_focus (GTK_WINDOW (self));
++  popover = focus ? gtk_widget_get_ancestor (focus, GTK_TYPE_POPOVER) : NULL;
++  if (popover)
++    {
++      gtk_popover_popdown (GTK_POPOVER (popover));
++      return;
++    }
++
++  if (gtk_search_bar_get_search_mode (self->search_bar))
++    {
++      gtk_search_bar_set_search_mode (self->search_bar, FALSE);
++      return;
++    }
++
++  if (adw_navigation_split_view_get_show_content (self->split_view))
++    {
++      AdwNavigationPage *page = adw_navigation_split_view_get_content (self->split_view);
++
++      if (self->current_panel && pop_visible_navigation (self->current_panel))
++        return;
++      if (self->single_panel_mode)
++        gtk_window_minimize (GTK_WINDOW (self));
++      else if (!page || adw_navigation_page_get_can_pop (page))
++        adw_navigation_split_view_set_show_content (self->split_view, FALSE);
++      return;
++    }
++
++  gtk_window_minimize (GTK_WINDOW (self));
++}
++
+ static gboolean
+ go_back_shortcut_cb (GtkWidget *widget,
+                      GVariant  *args,
+                      gpointer   user_data)
+ {
+-  g_debug ("Going to previous panel");
+-  switch_to_previous_panel (CC_WINDOW (widget));
++  CcWindow *self = CC_WINDOW (widget);
++
++  if (adw_navigation_split_view_get_collapsed (self->split_view))
++    go_back_mobile (self);
++  else
++    switch_to_previous_panel (self);
+ 
+   return GDK_EVENT_STOP;
+ }
+ 
++static gboolean
++mobile_back_key_pressed_cb (GtkEventControllerKey *controller,
++                            guint                  keyval,
++                            guint                  keycode,
++                            GdkModifierType        state,
++                            CcWindow              *self)
++{
++  GdkModifierType modifiers = state & (GDK_SHIFT_MASK | GDK_CONTROL_MASK | GDK_ALT_MASK |
++                                      GDK_SUPER_MASK | GDK_HYPER_MASK | GDK_META_MASK);
++
++  if (!adw_navigation_split_view_get_collapsed (self->split_view))
++    return GDK_EVENT_PROPAGATE;
++  if (keyval != GDK_KEY_Back && !(keyval == GDK_KEY_Left && modifiers == GDK_ALT_MASK))
++    return GDK_EVENT_PROPAGATE;
++
++  g_debug ("Returning through the visible mobile navigation hierarchy");
++  go_back_mobile (self);
++  return GDK_EVENT_STOP;
++}
++
++/* Modal dialogs limit event propagation to their own subtree. Attach the
++ * same native Back entry point to each dialog as it becomes visible. */
++static void
++mobile_back_dialog_changed_cb (CcWindow *self)
++{
++  AdwDialog *dialog = adw_application_window_get_visible_dialog (ADW_APPLICATION_WINDOW (self));
++  GtkEventController *controller;
++
++  if (!dialog || g_object_get_data (G_OBJECT (dialog), "cc-mobile-back-controller"))
++    return;
++
++  controller = gtk_event_controller_key_new ();
++  gtk_event_controller_set_propagation_phase (controller, GTK_PHASE_CAPTURE);
++  g_signal_connect_object (controller, "key-pressed", G_CALLBACK (mobile_back_key_pressed_cb), self, 0);
++  gtk_widget_add_controller (GTK_WIDGET (dialog), controller);
++  g_object_set_data (G_OBJECT (dialog), "cc-mobile-back-controller", controller);
++}
++
+ static gboolean
+ search_shortcut_cb (GtkWidget *widget,
+                     GVariant  *args,
+@@ -805,6 +925,7 @@ cc_window_class_init (CcWindowClass *klass)
+   gtk_widget_class_bind_template_callback (widget_class, search_entry_key_pressed_cb);
+ 
+   gtk_widget_class_add_binding (widget_class, GDK_KEY_Left, GDK_ALT_MASK, go_back_shortcut_cb, NULL);
++  gtk_widget_class_add_binding (widget_class, GDK_KEY_Back, 0, go_back_shortcut_cb, NULL);
+   gtk_widget_class_add_binding (widget_class, GDK_KEY_f, GDK_CONTROL_MASK, search_shortcut_cb, NULL);
+   gtk_widget_class_add_binding (widget_class, GDK_KEY_F, GDK_CONTROL_MASK, search_shortcut_cb, NULL);
+   gtk_widget_class_add_binding_action (widget_class, GDK_KEY_q, GDK_CONTROL_MASK, "window.close", NULL);
+@@ -818,8 +939,18 @@ cc_window_class_init (CcWindowClass *klass)
+ static void
+ cc_window_init (CcWindow *self)
+ {
++  GtkEventController *back_controller;
++
+   gtk_widget_init_template (GTK_WIDGET (self));
+ 
++  /* Resolve Back before entry widgets or nested views can consume it, so
++   * one gesture dismisses only the topmost dialog or navigation level. */
++  back_controller = gtk_event_controller_key_new ();
++  gtk_event_controller_set_propagation_phase (back_controller, GTK_PHASE_CAPTURE);
++  g_signal_connect (back_controller, "key-pressed", G_CALLBACK (mobile_back_key_pressed_cb), self);
++  gtk_widget_add_controller (GTK_WIDGET (self), back_controller);
++  g_signal_connect (self, "notify::visible-dialog", G_CALLBACK (mobile_back_dialog_changed_cb), NULL);
++
+   self->settings = g_settings_new ("org.gnome.Settings");
+   self->previous_panels = g_queue_new ();
+   self->previous_list_view = cc_panel_list_get_view (self->panel_list);

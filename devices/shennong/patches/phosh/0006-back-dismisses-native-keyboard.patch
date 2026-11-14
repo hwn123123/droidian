@@ -1,0 +1,14 @@
+diff --git a/src/shell.c b/src/shell.c
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -763,6 +763,10 @@
+       phosh_lockscreen_handle_back (lockscreen);
+     return TRUE;
+   }
++  if (priv->osk_manager && phosh_osk_manager_get_visible (priv->osk_manager)) {
++    phosh_osk_manager_set_visible (priv->osk_manager, FALSE);
++    return TRUE;
++  }
+   if (state & PHOSH_STATE_OVERVIEW) {
+     phosh_overview_reset (phosh_home_get_overview (PHOSH_HOME (priv->home)));
+     return TRUE;

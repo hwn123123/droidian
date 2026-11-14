@@ -300,7 +300,7 @@ Full-device cold-boot retention is not yet tested.
 `tools/build-control-center.sh` builds the matching native Settings source at
 `feb760d44e450f8284059ae1f1a5e4831c710c64`, applying the isolated patches in
 `patches/gnome-control-center/`. It produces the application and its matching
-data package at `+shennong3`; `install-control-center.sh` installs both during
+data package at `+shennong4`; `install-control-center.sh` installs both during
 device image preparation. The existing FPD, Gatekeeper and Phosh transport
 continue to handle the real biometric operation.
 
@@ -377,7 +377,7 @@ The pinned Phosh build now applies the phone home, backlight, edge navigation
 and lock-screen status patches in `patches/phosh/`. Build it with
 `tools/build-phosh.sh`; `tools/install-ui-packages.py` installs the matching
 shell, common files, plugins, mobile tweaks and libphosh package into an
-offline device image. The final UI package version is `+shennong14`.
+offline device image. The final UI package version is `+shennong15`.
 
 Adaptation 0.1.28 defaults to Inter 15 / Noto Sans CJK SC 15, Monospace 13 and
 native text scaling 1.15. These remain normal GNOME settings and can be
@@ -394,6 +394,23 @@ applications too, but applications that do not implement Back still need
 application-level support; the gesture does not forcibly close them. Vertical
 scrolls and incomplete swipes are rejected. No root input service is added.
 The native `mobi.phosh.shell.navigation edge-back-enabled` setting controls it.
+
+The Settings application also handles this standard Back input at the capture
+phase using the visible mobile navigation hierarchy. It closes the current
+native dialog through its cancel/close response, pops the innermost navigation
+page, then returns to the Settings category list; Back from that list minimizes
+the window without destroying it. Modal Adwaita dialogs receive their own
+controller because their event propagation excludes the parent window. Wide
+desktop layouts retain the existing panel-history shortcut. Phosh dismisses
+its native on-screen keyboard before forwarding Back to an application.
+
+The matching `+shennong4` Settings and `+shennong15` Phosh packages were installed
+on 2026-11-15. Actual touchscreen events from both screen edges exercised native
+navigation. Checks confirmed returning from the fingerprint page to the Settings
+list, cancelling the delete confirmation without removing either saved template,
+and stopping active enrollment on leaving its page (`FPSTATE_IDLE`). Firefox
+returned from the second local test document to the first using the same edge
+gesture. This does not establish Back support for arbitrary third-party apps.
 
 The main lock page retains its date/time and prioritizes a cellular card:
 operator, radio technology, signal percentage, registration/roaming state,

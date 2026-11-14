@@ -7,7 +7,7 @@ root=$(realpath "${1:?usage: sudo install-control-center.sh DEVICE_ROOT}")
 [[ $EUID == 0 && $root != / ]]
 grep -qx 'device=shennong' "$root/etc/droidian/shennong-build"
 out="$repo/out/shennong/settings-packages"
-version=50.1-1~git20260527223353.feb760d.next.gnome.50+shennong3
+version=50.1-1~git20260527223353.feb760d.next.gnome.50+shennong4
 archives=("gnome-control-center_${version}_arm64.deb" "gnome-control-center-data_${version}_all.deb")
 for archive in "${archives[@]}"; do
     [[ -s $out/$archive ]] || { echo 'Build tools/build-control-center.sh first.' >&2; exit 1; }
