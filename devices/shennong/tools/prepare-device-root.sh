@@ -76,6 +76,7 @@ bash "$here/install-audio-compat.sh" "$root"
 bash "$here/install-bluetooth-compat.sh" "$root"
 bash "$here/install-rpc-service-policy.sh" "$root"
 bash "$here/install-binder-compat.sh" "$root"
+bash "$here/install-drm-compat.sh" "$root"
 bash "$here/install-usb-framework.sh" "$root"
 bash "$here/install-cellular-runtime.sh" "$root"
 radio_packages=("$repo/out/shennong/telephony-packages/"ofono-binder-plugin_*+shennong3_arm64.deb)

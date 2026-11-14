@@ -2,3 +2,5 @@
 KERNEL=="kgsl-3d0", GROUP="video", MODE="0660", TAG+="uaccess"
 SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660", TAG+="uaccess"
 KERNEL=="binder|hwbinder|vndbinder", MODE="0666"
+# Captured ODM ueventd policy; native udev owns these nodes on the Linux host.
+SUBSYSTEM=="mi_display", OWNER="root", GROUP="android_graphics", MODE="0666"

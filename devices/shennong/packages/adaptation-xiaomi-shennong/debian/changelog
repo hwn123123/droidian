@@ -1,3 +1,11 @@
+adaptation-xiaomi-shennong (0.1.21) unstable; urgency=medium
+
+  * Match the captured ODM permissions for the display feature device.
+  * Prepare a scoped Composer DRM adapter that reuses its process-owned
+    master handle for atomic submissions rejected on a secondary open.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 11:00:00 +0800
+
 adaptation-xiaomi-shennong (0.1.20) unstable; urgency=medium
 
   * Apply the captured Bluetooth device ownership through native udev rules.

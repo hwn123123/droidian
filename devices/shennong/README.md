@@ -211,9 +211,33 @@ starting a login process.
 This dependency correction does not implement FastRPC. Its safe driver
 handoff, sensor/fingerprint/NFC integration and camera support remain separate
 unfinished work. Actual service and hardware errors are retained. A separate
-cold-boot display problem also remains under investigation: the shell and
-USB are running, but the panel can stay dark until the compositor is
-reinitialized. No startup restart loop is installed to conceal that failure.
+cold-boot display failure was narrowed to DRM atomic submissions returning
+`EACCES`: the stock Composer had a master handle but submitted using a
+different non-master open of the same device.
+
+### Composer DRM descriptor compatibility
+
+`compat/drm-shared-master.c` is an opt-in Bionic adapter scoped to the original
+Composer service. For an atomic commit rejected with `EACCES`, it can reuse
+only an existing master descriptor in that same process, after verifying the
+character device identity. It never acquires or drops DRM master, changes
+capabilities, or touches another process. Commits requesting page-flip events
+are forwarded unchanged because redirecting their event delivery would alter
+the caller's event-fd contract. Other backend errors propagate. The vendor
+images, libdrm, Composer, kernel and Phosh remain unchanged.
+
+The offline installer verifies the captured service definition and adds the
+adapter's environment through the existing read-only vendor overlay. Native
+udev also applies the captured ODM policy to `mi_display`. Descriptor opt-in,
+device identity, stale descriptor, event and error boundaries can be checked
+without hardware using `tests/test_drm_shared_master.sh` on Linux.
+
+After installing the adapter, the 2026-11-14 fresh boot had no atomic permission
+errors and submitted real framebuffers without restarting the compositor.
+The owner reported that volume first woke the display and that subsequent
+power-key cycles worked. First wake through the power key therefore still
+needs validation and investigation; this result is not a claim that every
+blanking/wake transition has been repaired. No startup restart loop is used.
 
 ### Panel brightness
 
