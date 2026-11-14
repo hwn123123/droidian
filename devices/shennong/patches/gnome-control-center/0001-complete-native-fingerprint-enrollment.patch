@@ -1,0 +1,1069 @@
+diff --git a/panels/fingerprint/cc-fingerprint-panel.c b/panels/fingerprint/cc-fingerprint-panel.c
+index b2e7acb..2e73253 100644
+--- a/panels/fingerprint/cc-fingerprint-panel.c
++++ b/panels/fingerprint/cc-fingerprint-panel.c
+@@ -1,424 +1,506 @@
+ /*
+  * Copyright (C) 2024 Cédric Bellegarde <cedric.bellegarde@adishatz.org>
+- *
++ * Copyright (C) 2026 Ning
+  * SPDX-License-Identifier: GPL-3.0-or-later
+  */
+ 
+ #include "cc-fingerprint-panel.h"
+ #include "cc-fingerprint-resources.h"
+-#include "cc-util.h"
+-
+-#include <adwaita.h>
+ #include <glib/gi18n.h>
+-#include <gdk/gdk.h>
+ 
+ #define MAX_FINGERPRINTS 5
+-
+-#define GFOREACH(list, item) \
+-    for(GList *__glist = list; \
+-        __glist && (item = __glist->data, TRUE); \
+-        __glist = __glist->next)
+-
+-#define FINGERPRINT_DBUS_NAME         "org.droidian.fingerprint"
+-#define FINGERPRINT_DBUS_PATH         "/org/droidian/fingerprint"
+-#define FINGERPRINT_DBUS_INTERFACE    "org.droidian.fingerprint"
++#define FP_NAME "org.droidian.fingerprint"
++#define FP_PATH "/org/droidian/fingerprint"
+ 
+ struct _CcFingerprintPanel {
+-  CcPanel            parent;
+-
+-  AdwToastOverlay   *toast_overlay;
+-  AdwExpanderRow    *fingerprints_row;
+-  AdwEntryRow       *fingerprint_entry;
+-  GtkButton         *fingerprint_new_button;
+-  GtkImage          *fingerprint_image;
+-  GtkProgressBar    *progressbar;
+-
++  CcPanel parent;
++  AdwToastOverlay *toast_overlay;
++  AdwExpanderRow *fingerprints_row;
++  AdwEntryRow *fingerprint_entry;
++  GtkButton *fingerprint_new_button;
++  GtkImage *fingerprint_image;
++  GtkProgressBar *progressbar;
++  GtkLabel *status_title;
++  GtkLabel *status_hint;
+   GList *fingerprints;
+-
+   GDBusProxy *fingerprint_proxy;
+   GCancellable *cancellable;
++  gchar *enroll_name;
++  gboolean enrolling;
++  gboolean pending;
++  gboolean deleting;
++  gboolean cancel_requested;
++  gboolean service_ready;
++  gboolean external_busy;
++  gboolean disposed;
+   gint enroll_progress;
++  gint result; /* 0: ready, 1: completed, 2: failed */
++  guint idle_inhibit;
+ };
+ 
+ G_DEFINE_TYPE (CcFingerprintPanel, cc_fingerprint_panel, CC_TYPE_PANEL)
+ 
++static void update_controls (CcFingerprintPanel *self);
++static void refresh_fingerprints (CcFingerprintPanel *self);
++
+ static void
+-handle_max_fingerprints (CcFingerprintPanel *self)
++release_idle_inhibit (CcFingerprintPanel *self)
+ {
+-  if (g_list_length (self->fingerprints) >= MAX_FINGERPRINTS)
+-    {
+-      gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprint_entry), FALSE);
+-      adw_preferences_row_set_title (
+-                                  ADW_PREFERENCES_ROW (self->fingerprint_entry),
+-                                  _("Please remove some fingerprints"));
+-    }
+-  else
+-    {
+-      gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprint_entry), TRUE);
+-      adw_preferences_row_set_title (
+-                                  ADW_PREFERENCES_ROW (self->fingerprint_entry),
+-                                  _("Fingerprint name"));
+-    }
++  GApplication *application = g_application_get_default ();
++
++  if (self->idle_inhibit && GTK_IS_APPLICATION (application))
++    gtk_application_uninhibit (GTK_APPLICATION (application), self->idle_inhibit);
++  self->idle_inhibit = 0;
+ }
+ 
+ static gboolean
+-stop_enroll_animation (CcFingerprintPanel *self)
++has_name (CcFingerprintPanel *self, const gchar *name)
+ {
+-  gdouble opacity = gtk_widget_get_opacity (
+-                                    GTK_WIDGET (self->fingerprint_image)) - 0.1;
+-
+-  if (self->enroll_progress == 0 || opacity <= self->enroll_progress / 150.0)
+-    return FALSE;
+-
+-  gtk_widget_set_opacity (GTK_WIDGET (self->fingerprint_image), opacity);
++  for (GList *l = self->fingerprints; l; l = l->next)
++    if (g_strcmp0 (adw_preferences_row_get_title (ADW_PREFERENCES_ROW (l->data)), name) == 0)
++      return TRUE;
++  return FALSE;
++}
+ 
+-  return TRUE;
++static void
++set_status (CcFingerprintPanel *self, const gchar *title, const gchar *hint, gboolean error)
++{
++  gtk_label_set_text (self->status_title, title);
++  gtk_label_set_text (self->status_hint, hint);
++  if (error)
++    gtk_widget_add_css_class (GTK_WIDGET (self->status_title), "error");
++  else
++    gtk_widget_remove_css_class (GTK_WIDGET (self->status_title), "error");
+ }
+ 
+-static gboolean
+-start_enroll_animation (CcFingerprintPanel *self)
++static void
++update_controls (CcFingerprintPanel *self)
+ {
+-  gdouble opacity = gtk_widget_get_opacity (
+-                                          GTK_WIDGET (self->fingerprint_image));
++  gboolean busy = self->pending || self->deleting;
++  guint count = g_list_length (self->fingerprints);
++  g_autofree gchar *subtitle = g_strdup_printf (_("%u of %u fingerprints saved"), count, MAX_FINGERPRINTS);
+ 
+-  if (self->enroll_progress == 0)
++  adw_expander_row_set_subtitle (self->fingerprints_row, subtitle);
++  gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprints_row),
++                             self->service_ready && !self->enrolling && !busy && count > 0);
++  gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprint_entry),
++                             self->service_ready && !self->enrolling && !busy && !self->external_busy && count < MAX_FINGERPRINTS);
++  gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprint_new_button),
++                             self->service_ready && !busy &&
++                             (self->enrolling || (!self->external_busy && count < MAX_FINGERPRINTS)));
++  gtk_button_set_label (self->fingerprint_new_button,
++                        self->pending ? _("Please wait…") :
++                        self->enrolling ? _("Cancel Enrollment") :
++                        self->result == 2 ? _("Try Enrollment Again") :
++                        self->result == 1 ? _("Add Another Fingerprint") : _("Start Enrollment"));
++  if (self->enrolling)
+     {
+-      return FALSE;
++      gtk_widget_add_css_class (GTK_WIDGET (self->fingerprint_new_button), "destructive-action");
++      gtk_widget_remove_css_class (GTK_WIDGET (self->fingerprint_new_button), "suggested-action");
+     }
+-  else if (opacity >= 1.0)
++  else
+     {
+-      g_timeout_add (25, (GSourceFunc) stop_enroll_animation, self);
+-      return FALSE;
++      gtk_widget_remove_css_class (GTK_WIDGET (self->fingerprint_new_button), "destructive-action");
++      gtk_widget_add_css_class (GTK_WIDGET (self->fingerprint_new_button), "suggested-action");
+     }
+-
+-  gtk_widget_set_opacity (GTK_WIDGET (self->fingerprint_image), opacity + 0.1);
+-
+-  return TRUE;
+ }
+ 
+ static void
+-remove_fingerprint_row (CcFingerprintPanel *self,
+-                        const gchar        *fingerprint)
++finish_error (CcFingerprintPanel *self, const gchar *message)
+ {
+-  GtkWidget *widget;
+-  const gchar *title;
++  release_idle_inhibit (self);
++  self->enrolling = FALSE;
++  self->pending = FALSE;
++  self->result = 2;
++  gtk_image_set_from_icon_name (self->fingerprint_image, "dialog-warning-symbolic");
++  gtk_widget_set_visible (GTK_WIDGET (self->progressbar), TRUE);
++  set_status (self, _("Enrollment Not Completed"), message, TRUE);
++  update_controls (self);
++}
+ 
+-  GFOREACH (self->fingerprints, widget)
++static const gchar *
++error_message (const gchar *code)
++{
++  if (g_str_has_prefix (code, "ERROR_TIMEOUT"))
++    return _("Enrollment timed out. Lift your finger and start again.");
++  if (g_str_has_prefix (code, "ERROR_NO_SPACE"))
++    return _("Fingerprint storage is full. Remove a saved fingerprint first.");
++  if (g_str_has_prefix (code, "ERROR_HW_UNAVAILABLE"))
++    return _("The fingerprint sensor is unavailable. Close this page and try again.");
++  if (g_str_has_prefix (code, "ERROR_LOCKOUT"))
++    return _("Too many attempts. Unlock with your password, then try again later.");
++  if (g_str_has_prefix (code, "ERROR_UNABLE_TO_PROCESS"))
++    return _("The sensor could not read your finger. Clean the sensor area and try again.");
++  return _("Enrollment failed. Lift your finger and try again.");
++}
++
++static const gchar *
++reply_message (gint reply)
++{
++  switch (reply)
+     {
+-      title = adw_preferences_row_get_title (ADW_PREFERENCES_ROW (widget));
+-      if (g_strcmp0 (title, fingerprint) == 0)
+-        {
+-          self->fingerprints = g_list_remove (self->fingerprints, widget);
+-          adw_expander_row_remove (self->fingerprints_row, widget);
+-          break;
+-        }
++    case 3: return _("The fingerprint sensor is busy. Wait a moment and try again.");
++    case 4: return _("Permission was denied. Unlock the device and try again.");
++    case 5: return _("This fingerprint name is already used. Choose another name.");
++    case 6: return _("This fingerprint is no longer saved. Reopen this page to refresh the list.");
++    case 8: return _("Enter a valid fingerprint name.");
++    default: return _("The fingerprint service could not complete the request. Try again.");
+     }
+-
+-  gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprints_row),
+-                            g_list_length (self->fingerprints) > 0);
+-  handle_max_fingerprints (self);
+ }
+ 
+ static void
+-remove_fingerprint_cb (GObject      *source_object,
+-                       GAsyncResult *res,
+-                       gpointer      user_data)
++remove_fingerprint_cb (GObject *object, GAsyncResult *res, gpointer data)
+ {
+-  g_autoptr(GVariant) value = NULL;
+-  g_autoptr(GError) error = NULL;
+-  gint ret;
+-
+-  value = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object),
+-                                    res, &error);
+-
+-  g_return_if_fail (value != NULL);
+-
+-  g_variant_get (value, "(i)", &ret);
+-
+-  if (ret < 0)
++  g_autoptr (CcFingerprintPanel) self = data;
++  g_autoptr (GError) error = NULL;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (object), res, &error);
++  gint status = -1;
++
++  if (self->disposed)
++    return;
++  self->deleting = FALSE;
++  if (reply)
++    g_variant_get (reply, "(i)", &status);
++  if (!reply || status != 0)
+     {
+-      g_warning ("Failed to remove fingerprint: %s", error->message);
++      set_status (self, _("Could Not Remove Fingerprint"), reply ? reply_message (status) :
++                   _("Cannot reach the fingerprint service. Close this page and try again."), TRUE);
++      update_controls (self);
+       return;
+     }
++  refresh_fingerprints (self);
+ }
+ 
+ static void
+-remove_button_clicked_cb (GtkWidget *button,
+-                          gpointer   user_data)
++remove_dialog_response (AdwAlertDialog *dialog, const gchar *response, CcFingerprintPanel *self)
+ {
+-    CcFingerprintPanel *self = (CcFingerprintPanel *) user_data;
+-    const gchar *fingerprint = gtk_widget_get_name (button);
+-
+-    g_dbus_proxy_call (
+-        self->fingerprint_proxy,
+-        "Remove",
+-        g_variant_new("(s)", fingerprint),
+-        G_DBUS_CALL_FLAGS_NONE,
+-        5000,
+-        self->cancellable,
+-        remove_fingerprint_cb,
+-        self);
++  const gchar *name = g_object_get_data (G_OBJECT (dialog), "fingerprint-name");
++
++  if (!g_str_equal (response, "remove") || self->enrolling || self->pending || self->deleting || self->disposed)
++    return;
++  self->deleting = TRUE;
++  update_controls (self);
++  g_dbus_proxy_call (self->fingerprint_proxy, "Remove", g_variant_new ("(s)", name),
++                     G_DBUS_CALL_FLAGS_NONE, 5000, self->cancellable,
++                     remove_fingerprint_cb, g_object_ref (self));
+ }
+ 
+ static void
+-add_fingerprint_row (CcFingerprintPanel *self,
+-                     const gchar        *fingerprint)
++remove_button_clicked_cb (GtkButton *button, CcFingerprintPanel *self)
+ {
+-  GtkWidget *action_row = adw_action_row_new ();
+-  GtkWidget *button = gtk_button_new_from_icon_name ("user-trash-symbolic");
+-
+-  adw_preferences_row_set_title (ADW_PREFERENCES_ROW (action_row), fingerprint);
+-
+-  gtk_widget_set_halign (button, GTK_ALIGN_END);
+-  gtk_widget_set_name (button, fingerprint);
+-  gtk_widget_set_valign (button, GTK_ALIGN_CENTER);
+-  gtk_widget_set_size_request (button, 92, -1);
+-  gtk_widget_add_css_class (button, "destructive-action");
+-  g_signal_connect (button, "clicked",
+-                    (GCallback) remove_button_clicked_cb, self);
+-
+-  adw_action_row_add_suffix (ADW_ACTION_ROW (action_row), button);
+-  self->fingerprints = g_list_append (self->fingerprints, action_row);
+-
+-  adw_expander_row_add_row (self->fingerprints_row, action_row);
+-
+-  gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprints_row), TRUE);
+-  handle_max_fingerprints (self);
++  const gchar *name = g_object_get_data (G_OBJECT (button), "fingerprint-name");
++  AdwAlertDialog *dialog;
++  g_autofree gchar *body = g_strdup_printf (_("Remove “%s”? You will no longer be able to unlock with this fingerprint."), name);
++
++  dialog = ADW_ALERT_DIALOG (adw_alert_dialog_new (_("Remove Fingerprint?"), body));
++  g_object_set_data_full (G_OBJECT (dialog), "fingerprint-name", g_strdup (name), g_free);
++  adw_alert_dialog_add_responses (dialog, "cancel", _("Cancel"), "remove", _("Remove"), NULL);
++  adw_alert_dialog_set_response_appearance (dialog, "remove", ADW_RESPONSE_DESTRUCTIVE);
++  adw_alert_dialog_set_default_response (dialog, "cancel");
++  adw_alert_dialog_set_close_response (dialog, "cancel");
++  g_signal_connect_object (dialog, "response", G_CALLBACK (remove_dialog_response), self, 0);
++  adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
+ }
+ 
+ static void
+-get_fingerprints_cb (GObject      *source_object,
+-                     GAsyncResult *res,
+-                     gpointer      user_data)
++add_fingerprint_row (CcFingerprintPanel *self, const gchar *name)
+ {
+-  CcFingerprintPanel *self = (CcFingerprintPanel *) user_data;
+-
+-  g_autoptr(GVariant) value = NULL;
+-  g_autoptr(GError) error = NULL;
+-  g_autoptr (GVariantIter) iter = NULL;
+-  const gchar *fingerprint;
+-
+-  gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprints_row), FALSE);
+-
+-  value = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object),
+-                                    res, &error);
+-
+-  g_return_if_fail (value != NULL);
+-
+-  g_variant_get (value, "(as)", &iter);
+-  while (g_variant_iter_loop (iter, "&s", &fingerprint))
+-    {
+-      add_fingerprint_row (self, fingerprint);
+-    }
++  GtkWidget *row, *button;
++
++  if (has_name (self, name))
++    return;
++  row = adw_action_row_new ();
++  button = gtk_button_new_from_icon_name ("user-trash-symbolic");
++  adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), name);
++  adw_action_row_add_prefix (ADW_ACTION_ROW (row), gtk_image_new_from_icon_name ("fingerprint-detection-symbolic"));
++  adw_action_row_set_subtitle (ADW_ACTION_ROW (row), _("Available for fingerprint unlock"));
++  gtk_widget_set_valign (button, GTK_ALIGN_CENTER);
++  gtk_widget_set_tooltip_text (button, _("Remove Fingerprint"));
++  gtk_widget_add_css_class (button, "flat");
++  g_object_set_data_full (G_OBJECT (button), "fingerprint-name", g_strdup (name), g_free);
++  g_signal_connect_object (button, "clicked", G_CALLBACK (remove_button_clicked_cb), self, 0);
++  adw_action_row_add_suffix (ADW_ACTION_ROW (row), button);
++  adw_expander_row_add_row (self->fingerprints_row, row);
++  self->fingerprints = g_list_append (self->fingerprints, row);
+ }
+ 
+ static void
+-set_widgets_state (CcFingerprintPanel *self,
+-                   gboolean            enroll_active)
++get_fingerprints_cb (GObject *object, GAsyncResult *res, gpointer data)
+ {
+-  if (enroll_active)
++  g_autoptr (CcFingerprintPanel) self = data;
++  g_autoptr (GError) error = NULL;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (object), res, &error);
++  g_auto (GStrv) names = NULL;
++
++  if (self->disposed)
++    return;
++  if (!reply)
+     {
+-      gtk_widget_set_opacity (GTK_WIDGET (self->fingerprint_image), 0.1);
+-      gtk_widget_set_opacity (GTK_WIDGET (self->progressbar), 1.0);
+-      gtk_widget_add_css_class (GTK_WIDGET (self->fingerprint_image),
+-                                "fingerprint-enroll");
+-
+-      gtk_widget_add_css_class (GTK_WIDGET (self->fingerprint_new_button),
+-                                "destructive-action");
+-      gtk_widget_remove_css_class (GTK_WIDGET (self->fingerprint_new_button),
+-                                   "suggested-action");
+-      gtk_button_set_label(self->fingerprint_new_button, _("Cancel"));
+-      adw_expander_row_set_expanded (self->fingerprints_row, FALSE);
+-      gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprints_row), FALSE);
+-      gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprint_entry), FALSE);
++      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++        set_status (self, _("Cannot Load Fingerprints"),
++                     _("Cannot reach the fingerprint service. Close this page and try again."), TRUE);
++      return;
+     }
+-  else
++  while (self->fingerprints)
+     {
+-      self->enroll_progress = 0;
+-      gtk_progress_bar_set_fraction (self->progressbar, 0.0);
+-      gtk_widget_set_opacity (GTK_WIDGET (self->progressbar), 0.0);
+-      gtk_widget_set_opacity (GTK_WIDGET (self->fingerprint_image), 1.0);
+-      gtk_widget_remove_css_class (GTK_WIDGET (self->fingerprint_image),
+-                                   "fingerprint-enroll");
+-      gtk_widget_add_css_class (GTK_WIDGET (self->fingerprint_new_button),
+-                                   "suggested-action");
+-      gtk_widget_remove_css_class (GTK_WIDGET (self->fingerprint_new_button),
+-                                   "destructive-action");
+-      gtk_button_set_label(self->fingerprint_new_button, _("New fingerprint"));
+-      gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprints_row),
+-                                g_list_length (self->fingerprints) > 0);
+-      handle_max_fingerprints (self);
++      GtkWidget *row = self->fingerprints->data;
++      self->fingerprints = g_list_delete_link (self->fingerprints, self->fingerprints);
++      adw_expander_row_remove (self->fingerprints_row, row);
+     }
++  g_variant_get (reply, "(^as)", &names);
++  for (guint i = 0; names[i]; i++)
++    add_fingerprint_row (self, names[i]);
++  update_controls (self);
+ }
+ 
+ static void
+-enroll_fingerprint_cb (GObject      *source_object,
+-                       GAsyncResult *res,
+-                       gpointer      user_data)
++refresh_fingerprints (CcFingerprintPanel *self)
+ {
+-  g_autoptr(GVariant) value = NULL;
+-  g_autoptr(GError) error = NULL;
+-  gint ret;
+-
+-  value = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object),
+-                                    res, &error);
+-
+-  g_return_if_fail (value != NULL);
+-
+-  g_variant_get (value, "(i)", &ret);
+-
+-  if (ret < 0)
+-    {
+-      g_warning ("Failed to enroll fingerprint: %s", error->message);
+-      return;
+-    }
++  g_dbus_proxy_call (self->fingerprint_proxy, "GetAll", NULL, G_DBUS_CALL_FLAGS_NONE,
++                     5000, self->cancellable, get_fingerprints_cb, g_object_ref (self));
+ }
+ 
+ static void
+-enroll_cancel_cb (GObject      *source_object,
+-                  GAsyncResult *res,
+-                  gpointer      user_data)
++finish_cancelled (CcFingerprintPanel *self)
+ {
+-  CcFingerprintPanel *self = (CcFingerprintPanel *)user_data;
+-  g_autoptr(GVariant) value = NULL;
+-  g_autoptr(GError) error = NULL;
+-  gint ret;
++  release_idle_inhibit (self);
++  self->enrolling = FALSE;
++  self->pending = FALSE;
++  self->result = 0;
++  gtk_progress_bar_set_fraction (self->progressbar, 0);
++  gtk_widget_set_visible (GTK_WIDGET (self->progressbar), FALSE);
++  gtk_image_set_from_icon_name (self->fingerprint_image, "fingerprint-detection-symbolic");
++  set_status (self, _("Enrollment Cancelled"), _("Your saved fingerprints have not been changed."), FALSE);
++  update_controls (self);
++}
+ 
+-  value = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object),
+-                                    res, &error);
++static void
++operation_cb (GObject *object, GAsyncResult *res, gpointer data)
++{
++  g_autoptr (CcFingerprintPanel) self = data;
++  g_autoptr (GError) error = NULL;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (object), res, &error);
++  gint status = -1;
++
++  if (self->disposed)
++    return;
++  self->pending = FALSE;
++  if (reply)
++    g_variant_get (reply, "(i)", &status);
++  if (!reply || (status != 0 && !(self->cancel_requested && status == 2)))
++    finish_error (self, reply ? reply_message (status) :
++                   _("Cannot reach the fingerprint service. Close this page and try again."));
++  else if (self->cancel_requested && self->result == 0)
++    finish_cancelled (self);
++  update_controls (self);
++}
+ 
+-  g_return_if_fail (value != NULL);
++static void
++fingerprint_new_button_clicked_cb (CcFingerprintPanel *self)
++{
++  g_autofree gchar *name = NULL;
+ 
+-  g_variant_get (value, "(i)", &ret);
+-  if (ret < 0)
++  if (self->pending || self->deleting || !self->service_ready)
++    return;
++  if (self->enrolling)
+     {
+-      g_warning ("Failed to cancel enroll: %s", error->message);
++      self->cancel_requested = TRUE;
++      self->pending = TRUE;
++      update_controls (self);
++      g_dbus_proxy_call (self->fingerprint_proxy, "Abort", NULL, G_DBUS_CALL_FLAGS_NONE,
++                         5000, self->cancellable, operation_cb, g_object_ref (self));
+       return;
+     }
+-
+-  set_widgets_state (self, FALSE);
+-}
+-
+-static void
+-enroll_fingerprint (CcFingerprintPanel *self, gboolean enroll)
+-{
+-  if (enroll)
++  name = g_strdup (gtk_editable_get_text (GTK_EDITABLE (self->fingerprint_entry)));
++  g_strstrip (name);
++  if (!*name)
+     {
+-      const gchar *fingerprint = gtk_editable_get_text (
+-                                    GTK_EDITABLE (self->fingerprint_entry));
+-
+-      g_dbus_proxy_call (self->fingerprint_proxy,
+-                         "Enroll",
+-                         g_variant_new("(s)", fingerprint),
+-                         G_DBUS_CALL_FLAGS_NONE,
+-                         5000,
+-                         self->cancellable,
+-                         enroll_fingerprint_cb,
+-                         self);
++      for (guint i = 1; i <= MAX_FINGERPRINTS + 1; i++)
++        {
++          g_free (name);
++          name = g_strdup_printf (_("Fingerprint %u"), i);
++          if (!has_name (self, name))
++            break;
++        }
++      gtk_editable_set_text (GTK_EDITABLE (self->fingerprint_entry), name);
+     }
+-  else
++  if (has_name (self, name))
+     {
+-        g_dbus_proxy_call (self->fingerprint_proxy,
+-                           "Abort",
+-                           g_variant_new ("(s)", "Cancelled"),
+-                           G_DBUS_CALL_FLAGS_NONE,
+-                           5000,
+-                           self->cancellable,
+-                           enroll_cancel_cb,
+-                           self);
++      finish_error (self, reply_message (5));
++      return;
+     }
++  self->enrolling = TRUE;
++  self->pending = TRUE;
++  self->cancel_requested = FALSE;
++  self->enroll_progress = 0;
++  self->result = 0;
++  g_free (self->enroll_name);
++  self->enroll_name = g_strdup (name);
++  if (GTK_IS_APPLICATION (g_application_get_default ()))
++    self->idle_inhibit = gtk_application_inhibit (GTK_APPLICATION (g_application_get_default ()),
++        GTK_WINDOW (gtk_widget_get_root (GTK_WIDGET (self))), GTK_APPLICATION_INHIBIT_IDLE,
++        _("Fingerprint enrollment in progress"));
++  gtk_progress_bar_set_fraction (self->progressbar, 0);
++  gtk_progress_bar_set_text (self->progressbar, _("Enrolled 0%"));
++  gtk_widget_set_visible (GTK_WIDGET (self->progressbar), TRUE);
++  gtk_image_set_from_icon_name (self->fingerprint_image, "fingerprint-detection-symbolic");
++  set_status (self, _("Place Your Finger on the White Circle"),
++               _("Press gently for about one second, then lift your finger. Repeat with the same finger."), FALSE);
++  update_controls (self);
++  g_dbus_proxy_call (self->fingerprint_proxy, "Enroll", g_variant_new ("(s)", name),
++                     G_DBUS_CALL_FLAGS_NONE, 10000, self->cancellable, operation_cb, g_object_ref (self));
+ }
+ 
+ static void
+ fingerprint_name_cb (CcFingerprintPanel *self)
+ {
+-  gtk_widget_set_sensitive (GTK_WIDGET (self->fingerprint_new_button),
+-                            adw_entry_row_get_text_length (
+-                              self->fingerprint_entry) > 0);
++  update_controls (self);
+ }
+ 
+ static void
+-fingerprint_new_button_clicked_cb (CcFingerprintPanel *self)
++fingerprint_proxy_signal_cb (GDBusProxy *proxy, const gchar *sender, const gchar *signal,
++                             GVariant *parameters, CcFingerprintPanel *self)
+ {
+-  gboolean enroll = gtk_widget_has_css_class (
+-                            GTK_WIDGET (self->fingerprint_new_button),
+-                            "suggested-action");
++  const gchar *value;
+ 
+-  set_widgets_state (self, enroll);
+-
+-  enroll_fingerprint (self, enroll);
+-}
+-
+-static void
+-fingerprint_proxy_signal_cb (GDBusProxy  *proxy,
+-                             const gchar *sender_name,
+-                             const gchar *signal_name,
+-                             GVariant    *parameters,
+-                             gpointer     user_data)
+-{
+-  CcFingerprintPanel *self = (CcFingerprintPanel *) user_data;
+-
+-  if (g_strcmp0 (signal_name, "EnrollProgressChanged") == 0)
++  if (self->disposed)
++    return;
++  if (g_str_equal (signal, "EnrollProgressChanged") && self->enrolling)
+     {
++      g_autofree gchar *text = NULL;
+       g_variant_get (parameters, "(i)", &self->enroll_progress);
+-      if (self->enroll_progress > 0)
++      self->enroll_progress = CLAMP (self->enroll_progress, 0, 100);
++      text = g_strdup_printf (_("Enrolled %d%%"), self->enroll_progress);
++      gtk_progress_bar_set_fraction (self->progressbar, self->enroll_progress / 100.0);
++      gtk_progress_bar_set_text (self->progressbar, text);
++      if (self->enroll_progress >= 100)
++        set_status (self, _("Saving Fingerprint…"), _("Keep your finger lifted while the sensor saves the fingerprint."), FALSE);
++      else if (self->enroll_progress > 0)
++        set_status (self, _("Lift and Place Your Finger Again"), self->enroll_progress >= 70 ?
++                     _("Almost done. Tilt your finger slightly so the sensor can capture its edges.") :
++                     _("Use the same finger. Change the angle slightly after each press."), FALSE);
++    }
++  else if (g_str_equal (signal, "AcquisitionInfo") && self->enrolling && !self->pending)
++    {
++      g_variant_get (parameters, "(&s)", &value);
++      if (g_str_equal (value, "FPACQUIRED_PARTIAL"))
++        set_status (self, _("Cover the Whole Sensor"), _("Place the center of your fingertip over the white circle."), FALSE);
++      else if (g_str_equal (value, "FPACQUIRED_INSUFFICIENT"))
++        set_status (self, _("Press Your Finger Firmly"), _("Keep your finger still and cover the white circle completely."), FALSE);
++      else if (g_str_equal (value, "FPACQUIRED_IMAGER_DIRTY"))
++        set_status (self, _("Clean the Sensor Area"), _("Wipe the screen and make sure your finger is clean and dry."), FALSE);
++      else if (g_str_equal (value, "FPACQUIRED_TOO_FAST"))
++        set_status (self, _("Hold Your Finger a Little Longer"), _("Press gently for about one second before lifting your finger."), FALSE);
++      else if (g_str_equal (value, "FPACQUIRED_TOO_SLOW"))
++        set_status (self, _("Lift and Place Your Finger Again"), _("Lift your finger between presses to capture another sample."), FALSE);
++      /* Vendor acquisition codes are normal FOD notifications, not failures. */
++    }
++  else if (g_str_equal (signal, "Added"))
++    {
++      g_variant_get (parameters, "(&s)", &value);
++      add_fingerprint_row (self, value);
++      if (self->enrolling && g_strcmp0 (value, self->enroll_name) == 0)
+         {
+-          g_timeout_add (25, (GSourceFunc) start_enroll_animation, self);
+-          gtk_progress_bar_set_fraction (self->progressbar,
+-                                         self->enroll_progress / 100.0);
++          AdwAlertDialog *dialog;
++          g_autofree gchar *body = g_strdup_printf (_("“%s” has been saved. You can now use this finger to unlock the device."), value);
++          self->enrolling = FALSE;
++          self->pending = FALSE;
++          self->result = 1;
++          release_idle_inhibit (self);
++          gtk_progress_bar_set_fraction (self->progressbar, 1);
++          gtk_progress_bar_set_text (self->progressbar, _("Enrollment Complete — 100%"));
++          gtk_image_set_from_icon_name (self->fingerprint_image, "emblem-ok-symbolic");
++          gtk_editable_set_text (GTK_EDITABLE (self->fingerprint_entry), "");
++          set_status (self, _("Fingerprint Saved Successfully"), body, FALSE);
++          adw_expander_row_set_expanded (self->fingerprints_row, TRUE);
++          dialog = ADW_ALERT_DIALOG (adw_alert_dialog_new (_("Fingerprint Saved Successfully"), body));
++          adw_alert_dialog_add_response (dialog, "done", _("Done"));
++          adw_alert_dialog_set_default_response (dialog, "done");
++          adw_alert_dialog_set_close_response (dialog, "done");
++          adw_alert_dialog_set_response_appearance (dialog, "done", ADW_RESPONSE_SUGGESTED);
++          adw_dialog_present (ADW_DIALOG (dialog), GTK_WIDGET (self));
+         }
++      update_controls (self);
+     }
+-  else if (g_strcmp0 (signal_name, "Added") == 0)
++  else if (g_str_equal (signal, "Removed"))
+     {
+-      AdwToast *toast = adw_toast_new (_("Fingerprint added"));
+-      const gchar *fingerprint_name;
+-
+-      g_variant_get (parameters, "(&s)", &fingerprint_name);
+-
+-      add_fingerprint_row (self, fingerprint_name);
+-      adw_toast_overlay_add_toast (self->toast_overlay, toast);
+-      gtk_editable_set_text (GTK_EDITABLE (self->fingerprint_entry), "");
+-      set_widgets_state (self, FALSE);
++      self->deleting = FALSE;
++      self->result = 0;
++      set_status (self, _("Fingerprint Removed"), _("Your other saved fingerprints are still available."), FALSE);
++      refresh_fingerprints (self);
+     }
+-  else if (g_strcmp0 (signal_name, "Removed") == 0)
++  else if (g_str_equal (signal, "ErrorInfo") && self->enrolling)
+     {
+-      const gchar *fingerprint_name;
+-
+-      g_variant_get (parameters, "(&s)", &fingerprint_name);
+-      remove_fingerprint_row (self, fingerprint_name);
++      g_variant_get (parameters, "(&s)", &value);
++      if (self->cancel_requested && g_str_equal (value, "ERROR_CANCELED"))
++        finish_cancelled (self);
++      else
++        finish_error (self, error_message (value));
++    }
++  else if (g_str_equal (signal, "Failed") && self->enrolling)
++    finish_error (self, _("Enrollment failed. Lift your finger and try again."));
++  else if (g_str_equal (signal, "Aborted") && self->enrolling)
++    finish_cancelled (self);
++  else if (g_str_equal (signal, "StateChanged"))
++    {
++      g_variant_get (parameters, "(&s)", &value);
++      self->external_busy = !g_str_equal (value, "FPSTATE_IDLE") && !self->enrolling;
++      if (g_str_equal (value, "FPSTATE_IDLE") && self->enrolling && !self->pending)
++        finish_error (self, _("Enrollment stopped before completion. Please try again."));
++      update_controls (self);
+     }
+-
+ }
+ 
+ static void
+-cc_fingerprint_panel_dispose (GObject *object)
++on_service_owner_changed (CcFingerprintPanel *self)
+ {
+-  CcFingerprintPanel *self = (CcFingerprintPanel *) object;
++  g_autofree gchar *owner = g_dbus_proxy_get_name_owner (self->fingerprint_proxy);
+ 
+-  if (self->fingerprint_proxy != NULL)
+-    g_dbus_proxy_call_sync (self->fingerprint_proxy,
+-                            "Abort",
+-                            g_variant_new ("(s)", "Quit"),
+-                            G_DBUS_CALL_FLAGS_NONE,
+-                            5000,
+-                            self->cancellable,
+-                            NULL);
+-
+-  g_clear_object (&self->fingerprint_proxy);
+-  g_clear_object (&self->cancellable);
+-
+-  G_OBJECT_CLASS (cc_fingerprint_panel_parent_class)->dispose (object);
++  self->service_ready = owner != NULL;
++  if (!self->service_ready)
++    finish_error (self, _("Cannot reach the fingerprint service. Close this page and try again."));
++  else
++    {
++      self->external_busy = FALSE;
++      refresh_fingerprints (self);
++    }
++  update_controls (self);
+ }
+ 
+ static void
+-cc_fingerprint_panel_finalize (GObject *object)
++on_panel_unmapped (CcFingerprintPanel *self)
+ {
+-  CcFingerprintPanel *self = (CcFingerprintPanel *) object;
+-  g_cancellable_cancel (self->cancellable);
++  if (!self->enrolling || !self->fingerprint_proxy || self->disposed)
++    return;
++  self->cancel_requested = TRUE;
++  g_dbus_proxy_call (self->fingerprint_proxy, "Abort", NULL, G_DBUS_CALL_FLAGS_NONE,
++                     5000, NULL, NULL, NULL);
++  finish_cancelled (self);
++}
+ 
+-  g_list_free (self->fingerprints);
++static void
++on_panel_mapped (CcFingerprintPanel *self)
++{
++  /* The optional name entry must not open the keyboard over the sensor. */
++  gtk_widget_grab_focus (GTK_WIDGET (self->fingerprint_new_button));
++}
+ 
+-  G_OBJECT_CLASS (cc_fingerprint_panel_parent_class)->finalize (object);
++static void
++cc_fingerprint_panel_dispose (GObject *object)
++{
++  CcFingerprintPanel *self = CC_FINGERPRINT_PANEL (object);
++
++  self->disposed = TRUE;
++  release_idle_inhibit (self);
++  if (self->enrolling && self->fingerprint_proxy)
++    g_dbus_proxy_call (self->fingerprint_proxy, "Abort", NULL, G_DBUS_CALL_FLAGS_NONE, 5000, NULL, NULL, NULL);
++  if (self->cancellable)
++    g_cancellable_cancel (self->cancellable);
++  g_clear_object (&self->fingerprint_proxy);
++  g_clear_object (&self->cancellable);
++  g_clear_pointer (&self->enroll_name, g_free);
++  g_clear_pointer (&self->fingerprints, g_list_free);
++  G_OBJECT_CLASS (cc_fingerprint_panel_parent_class)->dispose (object);
+ }
+ 
+ static void
+@@ -428,91 +510,42 @@ cc_fingerprint_panel_class_init (CcFingerprintPanelClass *klass)
+   GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+ 
+   object_class->dispose = cc_fingerprint_panel_dispose;
+-  object_class->finalize = cc_fingerprint_panel_finalize;
+-
+-  gtk_widget_class_set_template_from_resource (
+-              widget_class,
+-              "/org/gnome/control-center/fingerprint/cc-fingerprint-panel.ui");
+-
+-  gtk_widget_class_bind_template_child (widget_class,
+-                                        CcFingerprintPanel,
+-                                        toast_overlay);
+-  gtk_widget_class_bind_template_child (widget_class,
+-                                        CcFingerprintPanel,
+-                                        fingerprints_row);
+-  gtk_widget_class_bind_template_child (widget_class,
+-                                        CcFingerprintPanel,
+-                                        fingerprint_entry);
+-  gtk_widget_class_bind_template_child (widget_class,
+-                                        CcFingerprintPanel,
+-                                        fingerprint_new_button);
+-  gtk_widget_class_bind_template_child (widget_class,
+-                                        CcFingerprintPanel,
+-                                        fingerprint_image);
+-  gtk_widget_class_bind_template_child (widget_class,
+-                                        CcFingerprintPanel,
+-                                        progressbar);
+-  gtk_widget_class_bind_template_callback (widget_class,
+-                                           fingerprint_name_cb);
+-  gtk_widget_class_bind_template_callback (widget_class,
+-                                           fingerprint_new_button_clicked_cb);
++  gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/control-center/fingerprint/cc-fingerprint-panel.ui");
++#define BIND(name) gtk_widget_class_bind_template_child (widget_class, CcFingerprintPanel, name)
++  BIND (toast_overlay);
++  BIND (fingerprints_row);
++  BIND (fingerprint_entry);
++  BIND (fingerprint_new_button);
++  BIND (fingerprint_image);
++  BIND (progressbar);
++  BIND (status_title);
++  BIND (status_hint);
++#undef BIND
++  gtk_widget_class_bind_template_callback (widget_class, fingerprint_name_cb);
++  gtk_widget_class_bind_template_callback (widget_class, fingerprint_new_button_clicked_cb);
+ }
+ 
+ static void
+ cc_fingerprint_panel_init (CcFingerprintPanel *self)
+ {
+   g_autoptr (GError) error = NULL;
+-  g_autoptr(GtkCssProvider) provider = NULL;
+-
+-  provider = gtk_css_provider_new ();
+ 
+   g_resources_register (cc_fingerprint_get_resource ());
+   gtk_widget_init_template (GTK_WIDGET (self));
+-  gtk_css_provider_load_from_resource (
+-              provider,
+-              "/org/gnome/control-center/fingerprint/cc-fingerprint-panel.css");
+-  gtk_style_context_add_provider_for_display (
+-                                      gdk_display_get_default (),
+-                                      GTK_STYLE_PROVIDER (provider),
+-                                      GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+-
+-  self->fingerprints = NULL;
+-
+   self->cancellable = g_cancellable_new ();
+-
+-  self->fingerprint_proxy = g_dbus_proxy_new_for_bus_sync (
+-                                                    G_BUS_TYPE_SYSTEM,
+-                                                    0,
+-                                                    NULL,
+-                                                    FINGERPRINT_DBUS_NAME,
+-                                                    FINGERPRINT_DBUS_PATH,
+-                                                    FINGERPRINT_DBUS_INTERFACE,
+-                                                    self->cancellable,
+-                                                    &error);
+-
+-  if (error != NULL)
++  g_signal_connect (self, "unmap", G_CALLBACK (on_panel_unmapped), NULL);
++  g_signal_connect (self, "map", G_CALLBACK (on_panel_mapped), NULL);
++  self->fingerprint_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
++      G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START, NULL, FP_NAME, FP_PATH, FP_NAME,
++      self->cancellable, &error);
++  if (!self->fingerprint_proxy)
+     {
+-      g_warning("Can't connect to %s: %s", FINGERPRINT_DBUS_NAME, error->message);
+-      g_clear_object (&self->fingerprint_proxy);
++      finish_error (self, _("Cannot reach the fingerprint service. Close this page and try again."));
+       return;
+     }
+-
+-  g_dbus_proxy_call (
+-        self->fingerprint_proxy,
+-        "GetAll",
+-        NULL,
+-        G_DBUS_CALL_FLAGS_NONE,
+-        5000,
+-        self->cancellable,
+-        get_fingerprints_cb,
+-        self);
+-
+-    g_signal_connect (
+-        self->fingerprint_proxy,
+-        "g-signal",
+-        G_CALLBACK (fingerprint_proxy_signal_cb),
+-        self
+-    );
++  g_signal_connect_object (self->fingerprint_proxy, "g-signal", G_CALLBACK (fingerprint_proxy_signal_cb), self, 0);
++  g_signal_connect_object (self->fingerprint_proxy, "notify::g-name-owner", G_CALLBACK (on_service_owner_changed), self, G_CONNECT_SWAPPED);
++  on_service_owner_changed (self);
+ }
+ 
+ CcFingerprintPanel *
+diff --git a/panels/fingerprint/cc-fingerprint-panel.ui b/panels/fingerprint/cc-fingerprint-panel.ui
+index fed7674..c8e4ece 100644
+--- a/panels/fingerprint/cc-fingerprint-panel.ui
++++ b/panels/fingerprint/cc-fingerprint-panel.ui
+@@ -5,82 +5,87 @@
+     <property name="child">
+       <object class="AdwToolbarView">
+         <child type="top">
+-          <object class="AdwHeaderBar"></object>
++          <object class="AdwHeaderBar"/>
+         </child>
+         <property name="content">
+-          <object class="GtkScrolledWindow">
+-            <child>
+-              <object class="GtkBox">
+-                <property name="orientation">vertical</property>
+-                <property name="margin-top">10</property>
+-                <property name="margin-bottom">10</property>
+-                <property name="margin-start">30</property>
+-                <property name="margin-end">30</property>
+-                <property name="spacing">10</property>
++          <object class="AdwToastOverlay" id="toast_overlay">
++            <property name="child">
++              <object class="AdwPreferencesPage">
+                 <child>
+                   <object class="AdwPreferencesGroup">
+-                    <property name="vexpand">True</property>
+-                    <property name="halign">center</property>
+-                    <child>
+-                      <object class="AdwExpanderRow" id="fingerprints_row">
+-                        <property name="title" translatable="yes">Enrolled fingerprints</property>
+-                        <property name="valign">center</property>
+-                        <property name="vexpand">True</property>
+-                      </object>
+-                    </child>
+-                  </object>
+-                </child>
+-                <child>
+-                  <object class="AdwToastOverlay" id="toast_overlay">
+-                    <property name="vexpand">True</property>
+-                    <property name="hexpand">True</property>
++                    <property name="title" translatable="yes">Fingerprint Unlock</property>
++                    <property name="description" translatable="yes">Enroll a finger to unlock the device. Your password remains available.</property>
+                     <child>
+                       <object class="GtkBox">
+                         <property name="orientation">vertical</property>
+-                        <property name="spacing">10</property>
++                        <property name="spacing">16</property>
++                        <property name="margin-top">20</property>
++                        <property name="margin-bottom">20</property>
+                         <child>
+                           <object class="GtkImage" id="fingerprint_image">
+-                            <property name="icon_name">fingerprint-detection-symbolic</property>
+-                            <property name="pixel_size">200</property>
++                            <property name="icon-name">fingerprint-detection-symbolic</property>
++                            <property name="pixel-size">72</property>
++                          </object>
++                        </child>
++                        <child>
++                          <object class="GtkLabel" id="status_title">
++                            <property name="label" translatable="yes">Ready to Enroll</property>
++                            <property name="wrap">True</property>
++                            <property name="justify">center</property>
++                            <style><class name="title-3"/></style>
++                          </object>
++                        </child>
++                        <child>
++                          <object class="GtkLabel" id="status_hint">
++                            <property name="label" translatable="yes">Keep your finger clean and dry. Start enrollment, then press the white circle on the screen.</property>
++                            <property name="wrap">True</property>
++                            <property name="justify">center</property>
++                            <property name="max-width-chars">35</property>
++                            <style><class name="dim-label"/></style>
+                           </object>
+                         </child>
+                         <child>
+                           <object class="GtkProgressBar" id="progressbar">
+-                            <property name="opacity">0.0</property>
+-                            <property name="vexpand">True</property>
+-                            <property name="valign">start</property>
++                            <property name="visible">False</property>
++                            <property name="show-text">True</property>
++                            <property name="hexpand">True</property>
+                           </object>
+                         </child>
+                       </object>
+                     </child>
+-                  </object>
+-                </child>
+-                <child>
+-                  <object class="AdwPreferencesGroup">
+                     <child>
+                       <object class="AdwEntryRow" id="fingerprint_entry">
+-                        <property name="title" translatable="yes">Fingerprint name</property>
+-                        <property name="vexpand">True</property>
+-                        <signal name="notify::text-length" handler="fingerprint_name_cb" object="CcFingerprintPanel" swapped="yes" />
++                        <property name="title" translatable="yes">Fingerprint name (optional)</property>
++                        <property name="tooltip-text" translatable="yes">Leave blank to choose a name automatically.</property>
++                        <signal name="notify::text-length" handler="fingerprint_name_cb" object="CcFingerprintPanel" swapped="yes"/>
+                       </object>
+                     </child>
+                     <child>
+                       <object class="GtkButton" id="fingerprint_new_button">
+-                        <property name="label" translatable="yes">New fingerprint</property>
+-                        <property name="margin-top">20</property>
+-                        <property name="margin-bottom">50</property>
++                        <property name="label" translatable="yes">Start Enrollment</property>
++                        <property name="margin-top">16</property>
++                        <property name="margin-bottom">24</property>
+                         <property name="sensitive">False</property>
+-                        <signal name="clicked" handler="fingerprint_new_button_clicked_cb" object="CcFingerprintPanel" swapped="yes" />
+-                        <style>
+-                          <class name="suggested-action" />
+-                          <class name="pill" />
+-                        </style>
++                        <signal name="clicked" handler="fingerprint_new_button_clicked_cb" object="CcFingerprintPanel" swapped="yes"/>
++                        <style><class name="suggested-action"/><class name="pill"/></style>
++                      </object>
++                    </child>
++                  </object>
++                </child>
++                <child>
++                  <object class="AdwPreferencesGroup">
++                    <property name="title" translatable="yes">Saved Fingerprints</property>
++                    <property name="description" translatable="yes">You can save up to five fingerprints. Removing one requires confirmation.</property>
++                    <child>
++                      <object class="AdwExpanderRow" id="fingerprints_row">
++                        <property name="title" translatable="yes">Manage Saved Fingerprints</property>
++                        <property name="expanded">True</property>
+                       </object>
+                     </child>
+                   </object>
+                 </child>
+               </object>
+-            </child>
++            </property>
+           </object>
+         </property>
+       </object>

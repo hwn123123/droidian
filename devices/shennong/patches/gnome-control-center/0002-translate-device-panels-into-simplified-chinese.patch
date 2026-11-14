@@ -1,0 +1,334 @@
+diff --git a/debian/rules b/debian/rules
+index 19e3269..e454604 100755
+--- a/debian/rules
++++ b/debian/rules
+@@ -7,6 +6,0 @@ export DEB_LDFLAGS_MAINT_APPEND = -Wl,-O1 -Wl,-z,defs
+-TRANSLATIONS := $(notdir $(shell find droidian_po -name '*.po'))
+-define TRANSLATION_install
+-	msgcat --use-first po/$(1) droidian_po/$(1) >po/$(1).new
+-	mv po/$(1).new po/$(1)
+-endef
+-
+@@ -25,2 +19,5 @@ override_dh_auto_configure:
+-	$(info Droidian translations: $(TRANSLATIONS))
+-	$(foreach translation,$(TRANSLATIONS),$(call TRANSLATION_install,$(translation)))
++	set -e; for catalog in droidian_po/*.po; do \
++		translation=$$(basename "$$catalog"); \
++		msgcat --use-first "$$catalog" "po/$$translation" > "po/$$translation.new"; \
++		mv "po/$$translation.new" "po/$$translation"; \
++	done
+diff --git a/droidian_po/zh_CN.po b/droidian_po/zh_CN.po
+new file mode 100644
+index 0000000..dfccf8d
+--- /dev/null
++++ b/droidian_po/zh_CN.po
+@@ -0,0 +1,259 @@
++msgid ""
++msgstr ""
++"Project-Id-Version: Droidian device panels\n"
++"Language: zh_CN\n"
++"MIME-Version: 1.0\n"
++"Content-Type: text/plain; charset=UTF-8\n"
++"Content-Transfer-Encoding: 8bit\n"
++"Plural-Forms: nplurals=1; plural=0;\n"
++
++msgid "Fingerprint"
++msgstr "指纹"
++
++msgid "Configure Fingerprint settings"
++msgstr "设置指纹录入与解锁"
++
++msgid "NFC"
++msgstr "NFC 近场通信"
++
++msgid "Configure NFC settings"
++msgstr "设置 NFC 近场通信"
++
++msgid "Fingerprint Unlock"
++msgstr "指纹解锁"
++
++msgid "Enroll a finger to unlock the device. Your password remains available."
++msgstr "录入指纹后可用于解锁，也可以继续使用密码。"
++
++msgid "Ready to Enroll"
++msgstr "准备录入指纹"
++
++msgid "Keep your finger clean and dry. Start enrollment, then press the white circle on the screen."
++msgstr "请保持手指清洁、干燥。开始录入后，按住屏幕上的白色感应圈。"
++
++msgid "Fingerprint name (optional)"
++msgstr "指纹名称（选填）"
++
++msgid "Leave blank to choose a name automatically."
++msgstr "留空时将自动命名。"
++
++msgid "Start Enrollment"
++msgstr "开始录入"
++
++msgid "Cancel Enrollment"
++msgstr "取消录入"
++
++msgid "Try Enrollment Again"
++msgstr "重新录入"
++
++msgid "Add Another Fingerprint"
++msgstr "再录入一枚"
++
++msgid "Please wait…"
++msgstr "请稍候…"
++
++msgid "Saved Fingerprints"
++msgstr "已录入的指纹"
++
++msgid "You can save up to five fingerprints. Removing one requires confirmation."
++msgstr "最多可录入 5 枚指纹，删除前需要确认。"
++
++msgid "Manage Saved Fingerprints"
++msgstr "管理已录入的指纹"
++
++#, c-format
++msgid "%u of %u fingerprints saved"
++msgstr "已录入 %u / %u 枚指纹"
++
++msgid "Enrollment Not Completed"
++msgstr "指纹录入未完成"
++
++msgid "Enrollment timed out. Lift your finger and start again."
++msgstr "录入已超时，请抬起手指后重新开始。"
++
++msgid "Fingerprint storage is full. Remove a saved fingerprint first."
++msgstr "指纹存储已满，请先删除一枚已有指纹。"
++
++msgid "The fingerprint sensor is unavailable. Close this page and try again."
++msgstr "指纹传感器暂时不可用，请关闭此页面后重试。"
++
++msgid "Too many attempts. Unlock with your password, then try again later."
++msgstr "尝试次数过多，请使用密码解锁，稍后再试。"
++
++msgid "The sensor could not read your finger. Clean the sensor area and try again."
++msgstr "无法读取指纹，请擦净感应区域后重试。"
++
++msgid "Enrollment failed. Lift your finger and try again."
++msgstr "录入失败，请抬起手指后重新录入。"
++
++msgid "The fingerprint sensor is busy. Wait a moment and try again."
++msgstr "指纹传感器正忙，请稍候再试。"
++
++msgid "Permission was denied. Unlock the device and try again."
++msgstr "未获得操作权限，请解锁设备后重试。"
++
++msgid "This fingerprint name is already used. Choose another name."
++msgstr "此指纹名称已存在，请换一个名称。"
++
++msgid "This fingerprint is no longer saved. Reopen this page to refresh the list."
++msgstr "此指纹已不存在，请重新打开页面刷新列表。"
++
++msgid "Enter a valid fingerprint name."
++msgstr "请输入有效的指纹名称。"
++
++msgid "The fingerprint service could not complete the request. Try again."
++msgstr "指纹服务未能完成操作，请重试。"
++
++msgid "Could Not Remove Fingerprint"
++msgstr "删除指纹失败"
++
++msgid "Cannot reach the fingerprint service. Close this page and try again."
++msgstr "无法连接指纹服务，请关闭此页面后重试。"
++
++#, c-format
++msgid "Remove “%s”? You will no longer be able to unlock with this fingerprint."
++msgstr "确定删除“%s”吗？删除后将无法用这枚指纹解锁。"
++
++msgid "Remove Fingerprint?"
++msgstr "删除这枚指纹？"
++
++msgid "Cancel"
++msgstr "取消"
++
++msgid "Remove"
++msgstr "删除"
++
++msgid "Available for fingerprint unlock"
++msgstr "可用于指纹解锁"
++
++msgid "Remove Fingerprint"
++msgstr "删除指纹"
++
++msgid "Cannot Load Fingerprints"
++msgstr "无法读取指纹列表"
++
++msgid "Enrollment Cancelled"
++msgstr "已取消录入"
++
++msgid "Your saved fingerprints have not been changed."
++msgstr "已保存的指纹不受影响。"
++
++#, c-format
++msgid "Fingerprint %u"
++msgstr "指纹 %u"
++
++msgid "Enrolled 0%"
++msgstr "已采集 0%"
++
++msgid "Place Your Finger on the White Circle"
++msgstr "请将手指放在白色感应圈上"
++
++msgid "Press gently for about one second, then lift your finger. Repeat with the same finger."
++msgstr "轻按约 1 秒后抬起，用同一根手指重复操作。"
++
++#, c-format
++msgid "Enrolled %d%%"
++msgstr "已采集 %d%%"
++
++msgid "Saving Fingerprint…"
++msgstr "正在保存指纹…"
++
++msgid "Keep your finger lifted while the sensor saves the fingerprint."
++msgstr "请抬起手指，等待传感器完成保存。"
++
++msgid "Lift and Place Your Finger Again"
++msgstr "请抬起后再次按压"
++
++msgid "Almost done. Tilt your finger slightly so the sensor can capture its edges."
++msgstr "即将完成，请稍微调整手指角度，补充采集指腹边缘。"
++
++msgid "Use the same finger. Change the angle slightly after each press."
++msgstr "请使用同一根手指，每次按压后稍微调整角度。"
++
++msgid "Cover the Whole Sensor"
++msgstr "请完整覆盖感应区域"
++
++msgid "Place the center of your fingertip over the white circle."
++msgstr "请将指腹中心放在白色感应圈上。"
++
++msgid "Press Your Finger Firmly"
++msgstr "请贴紧感应区域"
++
++msgid "Keep your finger still and cover the white circle completely."
++msgstr "请保持手指稳定，并完整覆盖白色感应圈。"
++
++msgid "Clean the Sensor Area"
++msgstr "请清洁感应区域"
++
++msgid "Wipe the screen and make sure your finger is clean and dry."
++msgstr "请擦净屏幕，保持手指清洁、干燥。"
++
++msgid "Hold Your Finger a Little Longer"
++msgstr "请稍微延长按压时间"
++
++msgid "Press gently for about one second before lifting your finger."
++msgstr "请轻按约 1 秒后再抬起。"
++
++msgid "Lift your finger between presses to capture another sample."
++msgstr "每次按压后请抬起手指，再采集下一个样本。"
++
++#, c-format
++msgid "“%s” has been saved. You can now use this finger to unlock the device."
++msgstr "“%s”已保存，现在可以使用这枚指纹解锁设备。"
++
++msgid "Enrollment Complete — 100%"
++msgstr "录入完成 · 100%"
++
++msgid "Fingerprint Saved Successfully"
++msgstr "指纹录入成功"
++
++msgid "Done"
++msgstr "完成"
++
++msgid "Fingerprint Removed"
++msgstr "指纹已删除"
++
++msgid "Your other saved fingerprints are still available."
++msgstr "其他已保存的指纹仍然可用。"
++
++msgid "Enrollment stopped before completion. Please try again."
++msgstr "录入尚未完成就已停止，请重新录入。"
++
++msgid "Enable NFC Server"
++msgstr "开启 NFC"
++
++msgid "NFC Settings"
++msgstr "NFC 设置"
++
++msgid "NFC read"
++msgstr "读取 NFC 标签"
++
++msgid "Read a NFC tag"
++msgstr "请将标签靠近设备背面的 NFC 感应区域"
++
++msgid "Read"
++msgstr "读取"
++
++msgid "NFC read status"
++msgstr "读取状态"
++
++msgid "If reading was successful"
++msgstr "显示最近一次读取的结果"
++
++msgid "Success"
++msgstr "读取成功"
++
++msgid "Fail"
++msgstr "读取失败或未检测到标签"
++
++msgid "Unexpected"
++msgstr "读取异常，请重试"
++
++msgid "Waiting for NFC tag…"
++msgstr "等待读取，请靠近 NFC 标签…"
++
++msgid "Not read yet"
++msgstr "尚未读取"
++
++msgid "Fingerprint enrollment in progress"
++msgstr "正在录入指纹"
+diff --git a/panels/nfc/cc-nfc-panel.c b/panels/nfc/cc-nfc-panel.c
+index 4204513..259065f 100644
+--- a/panels/nfc/cc-nfc-panel.c
++++ b/panels/nfc/cc-nfc-panel.c
+@@ -74,11 +74,11 @@ update_label_idle (gpointer user_data)
+     ThreadData *data = user_data;
+ 
+     if (data->exit_status == 0) {
+-        gtk_label_set_text(GTK_LABEL(data->self->nfc_read_label), "Success");
++        gtk_label_set_text(GTK_LABEL(data->self->nfc_read_label), _("Success"));
+     } else if (data->exit_status == 1) {
+-        gtk_label_set_text(GTK_LABEL(data->self->nfc_read_label), "Fail");
++        gtk_label_set_text(GTK_LABEL(data->self->nfc_read_label), _("Fail"));
+     } else {
+-        gtk_label_set_text(GTK_LABEL(data->self->nfc_read_label), "Unexpected");
++        gtk_label_set_text(GTK_LABEL(data->self->nfc_read_label), _("Unexpected"));
+     }
+ 
+     g_free(data);
+@@ -125,6 +125,7 @@ nfc_read_ndef (gpointer user_data)
+ static void
+ nfc_read_ndef_threaded (CcNfcPanel *self)
+ {
++    gtk_label_set_text (GTK_LABEL (self->nfc_read_label), _("Waiting for NFC tag…"));
+     g_thread_new("nfc_read_ndef", nfc_read_ndef, self);
+ }
+ 
+@@ -157,6 +158,7 @@ cc_nfc_panel_init (CcNfcPanel *self)
+ {
+   g_resources_register (cc_nfc_get_resource ());
+   gtk_widget_init_template (GTK_WIDGET (self));
++  gtk_label_set_text (GTK_LABEL (self->nfc_read_label), _("Not read yet"));
+ 
+   gchar *output = NULL;
+   gchar *error = NULL;
+diff --git a/po/POTFILES.in b/po/POTFILES.in
+index e910c9e..9979151 100644
+--- a/po/POTFILES.in
++++ b/po/POTFILES.in
+@@ -301,3 +301,10 @@ shell/org.gnome.Settings.gschema.xml
+ shell/shortcuts-dialog.blp
+ # Please do not remove this file from POTFILES.in. Run "git submodule init && git submodule update" to get it.
+ subprojects/gvc/gvc-mixer-control.c
++
++panels/fingerprint/cc-fingerprint-panel.c
++panels/fingerprint/cc-fingerprint-panel.ui
++panels/fingerprint/gnome-fingerprint-panel.desktop.in
++panels/nfc/cc-nfc-panel.c
++panels/nfc/cc-nfc-panel.ui
++panels/nfc/gnome-nfc-panel.desktop.in

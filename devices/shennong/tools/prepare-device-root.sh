@@ -67,6 +67,7 @@ python3 "$here/install-ui-packages.py" "${ui_args[@]}"
 bash "$here/install-sensor-packages.sh" "$root"
 bash "$here/install-nfc-plugin.sh" "$root"
 bash "$here/install-fingerprint-packages.sh" "$root"
+bash "$here/install-control-center.sh" "$root"
 work=$(mktemp -d "$repo/out/shennong/device-config.XXXXXX")
 cp -a "$here/../packages/adaptation-xiaomi-shennong" "$work/source"
 (cd "$work/source" && dpkg-buildpackage --no-sign -b)

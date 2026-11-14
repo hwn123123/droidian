@@ -295,6 +295,50 @@ synthesized by the adapter. Restarting the native FPD service retained and
 re-enumerated the saved template; the display's local HBM remained off afterward.
 Full-device cold-boot retention is not yet tested.
 
+### Fingerprint enrollment interface and device translations
+
+`tools/build-control-center.sh` builds the matching native Settings source at
+`feb760d44e450f8284059ae1f1a5e4831c710c64`, applying the isolated patches in
+`patches/gnome-control-center/`. It produces the application and its matching
+data package at `+shennong3`; `install-control-center.sh` installs both during
+device image preparation. The existing FPD, Gatekeeper and Phosh transport
+continue to handle the real biometric operation.
+
+Install the build dependencies from the pinned Settings source's
+`debian/control` in the matching arm64 build environment, then run
+`sudo bash devices/shennong/tools/build-control-center.sh` before preparing
+the image. Preserve both exported packages and `SHA256SUMS` in
+`out/shennong/settings-packages/`; image preparation verifies and installs
+the exact application/data pair without downloading a different Settings build.
+
+The panel now shows an explicit enrollment state, actual sensor progress,
+guidance for acquired samples, translated errors and retry controls. A result
+is shown as successful only after FPD's `Added` callback confirms a saved
+template. Success remains visible at 100% and opens a confirmation dialog.
+Saved fingerprints are listed with counts and a delete confirmation. Empty
+names are filled automatically; duplicate names are rejected before enrollment.
+Leaving the panel cancels its own recording, and GLib timeouts used by the old
+opacity animation have been removed. Native `GtkApplication` idle inhibition
+lasts only during enrollment and is released on every terminal path.
+
+Chinese strings live in Droidian's existing `droidian_po/zh_CN.po` catalog;
+the device panel sources and metadata are included in `po/POTFILES.in`. The
+packaging loop now merges each supplementary catalog separately. This fixes
+the existing multiple-catalog recipe and preserves other system translations.
+Fingerprint and NFC settings follow the system locale, including desktop
+names, buttons, progress, instructions and result messages. No locale watcher
+or separate settings daemon is installed.
+
+On 2026-11-14 the matching `+shennong3` application/data packages were installed
+and passed `dpkg -V`. Live UI checks confirmed Chinese text, duplicate-name
+rejection, cancellation without losing an existing template, and a translated
+timeout with a retry button. A physical enrollment then reached the sensor's
+zero-remaining callback, emitted native `Added`, and was captured displaying
+the Chinese success dialog and Done button. The saved count updated to two;
+`GetAll` confirmed both entries. The GNOME session reported no remaining idle
+inhibitors after completion. NFC translations are packaged, but physical tag
+operations remain unverified as described above.
+
 ### Network and camera module initialization
 
 Adaptation 0.1.26 corrects two missing stock module loads. The previously
