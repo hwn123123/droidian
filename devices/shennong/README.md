@@ -650,6 +650,19 @@ dbus-run-session -- python3 devices/shennong/tests/test_modem_publication.py /us
 It checks that incomplete objects stay out of snapshots and exactly one
 complete announcement is emitted, including asynchronous properties.
 
+On 2026-11-14, the optional Denial mobile session was evaluated from the
+separate `hwn123123/denial` `deniai-14pro` fork. Native KGSL rendering, standard
+touch input, screen-power toggling and Xwayland worked, but the owner reported
+horizontal tearing. Waiting for SDE release fences, disabling render-ahead
+and setting the vendor connector LP state to ON did not remove that symptom.
+At the owner's request, this experiment was stopped and the existing Phosh
+desktop restored. The owner confirmed that the original desktop and touch
+worked again. Phosh and its Android HWC service remain enabled at boot;
+Denial is stopped and disabled. USB/SSH and cellular were still connected.
+The Denial changes remain isolated in its own fork and do not become this
+device image's default desktop. No slot A, recovery or partition changes were
+made for this desktop evaluation.
+
 This remains a development port. These cellular checks cover the inserted SIM
 and IPv4 data. Wi-Fi Internet access and basic speaker/microphone operation
 also passed the separate checks described above. Dual-SIM data switching,
