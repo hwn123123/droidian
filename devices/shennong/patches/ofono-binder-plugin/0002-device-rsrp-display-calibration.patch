@@ -1,0 +1,255 @@
+diff --git a/src/binder_signal_policy.h b/src/binder_signal_policy.h
+--- /dev/null
++++ b/src/binder_signal_policy.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef BINDER_SIGNAL_POLICY_H
++#define BINDER_SIGNAL_POLICY_H
++
++#define BINDER_RSRP_THRESHOLD_COUNT 4
++
++/* A device policy, in actual dBm. Unknown/out-of-range readings stay unknown. */
++static inline int
++binder_signal_rsrp_thresholds_valid(const int* thresholds)
++{
++    int i;
++    for (i = 0; i < BINDER_RSRP_THRESHOLD_COUNT; i++) {
++        if (thresholds[i] < -140 || thresholds[i] > -44 ||
++            (i && thresholds[i] <= thresholds[i - 1])) return 0;
++    }
++    return 1;
++}
++
++static inline int
++binder_signal_rsrp_quality(int dbm, const int* thresholds)
++{
++    int level = 0;
++    if (dbm < -140 || dbm > -44) return 0;
++    while (level < BINDER_RSRP_THRESHOLD_COUNT && dbm >= thresholds[level]) level++;
++    return level * 25;
++}
++#endif
+diff --git a/src/binder_types.h b/src/binder_types.h
+--- a/src/binder_types.h
++++ b/src/binder_types.h
+@@ -64,6 +64,8 @@
+     int network_selection_timeout_ms;
+     int signal_strength_dbm_weak;
+     int signal_strength_dbm_strong;
++    gboolean signal_strength_rsrp_calibrated;
++    int signal_strength_rsrp_thresholds[4];
+     enum ofono_radio_access_mode techs;
+     RADIO_PREF_NET_TYPE lte_network_mode;
+     RADIO_PREF_NET_TYPE umts_network_mode;
+diff --git a/src/binder_plugin.c b/src/binder_plugin.c
+--- a/src/binder_plugin.c
++++ b/src/binder_plugin.c
+@@ -28,6 +28,7 @@
+ #include "binder_log.h"
+ #include "binder_logger.h"
+ #include "binder_modem.h"
++#include "binder_signal_policy.h"
+ #include "binder_netreg.h"
+ #include "binder_network.h"
+ #include "binder_radio.h"
+@@ -1917,6 +1918,21 @@
+     }
+     gutil_ints_unref(ints);
+
++    /* Optional device RSRP display calibration; upstream defaults stay intact. */
++    ints = binder_plugin_config_get_ints(file, group, "signalStrengthRsrpThresholds");
++    if (ints) {
++        const int* dbms = gutil_ints_get_data(ints, NULL);
++        if (gutil_ints_get_count(ints) == BINDER_RSRP_THRESHOLD_COUNT &&
++            binder_signal_rsrp_thresholds_valid(dbms)) {
++            memcpy(config->signal_strength_rsrp_thresholds, dbms,
++                sizeof(config->signal_strength_rsrp_thresholds));
++            config->signal_strength_rsrp_calibrated = TRUE;
++        } else {
++            ofono_warn("%s: ignoring invalid RSRP display thresholds", group);
++        }
++    }
++    gutil_ints_unref(ints);
++
+     return slot;
+ }
+
+diff --git a/src/binder_netreg.c b/src/binder_netreg.c
+--- a/src/binder_netreg.c
++++ b/src/binder_netreg.c
+@@ -16,6 +16,7 @@
+
+ #include "binder_modem.h"
+ #include "binder_netreg.h"
++#include "binder_signal_policy.h"
+ #include "binder_network.h"
+ #include "binder_oplist.h"
+ #include "binder_util.h"
+@@ -77,6 +78,8 @@
+     gboolean replace_strange_oper;
+     int signal_strength_dbm_weak;
+     int signal_strength_dbm_strong;
++    gboolean signal_strength_rsrp_calibrated;
++    int signal_strength_rsrp_thresholds[BINDER_RSRP_THRESHOLD_COUNT];
+     int network_selection_timeout_ms;
+     RadioRequest* register_req;
+     RadioRequest* strength_req;
+@@ -1668,7 +1671,8 @@
+     const RadioSignalStrengthLte* lte,
+     const RadioSignalStrengthWcdma_1_2* wcdma,
+     const RadioSignalStrengthTdScdma_1_2* tdscdma,
+-    const RadioSignalStrengthNr* nr)
++    const RadioSignalStrengthNr* nr,
++    gboolean* rsrp_used)
+ {
+     int rssi = -1, rscp = -1, rsrp = -1;
+
+@@ -1712,7 +1716,8 @@
+         }
+     }
+
+-    if (rsrp >= RSRP_MIN) {
++    *rsrp_used = (rsrp >= RSRP_MIN);
++    if (*rsrp_used) {
+         return binder_netreg_dbm_from_rsrp(rsrp);
+     } else if (rscp >= RSCP_MIN) {
+         return binder_netreg_dbm_from_rscp(rscp);
+@@ -1726,7 +1731,8 @@
+ static
+ int
+ binder_netreg_get_signal_strength_dbm_aidl(
+-    GBinderReader* reader)
++    GBinderReader* reader,
++    gboolean* rsrp_used)
+ {
+     int rssi = -1, rscp = -1, rsrp = -1;
+     const RadioSignalStrengthGsm* gsm;
+@@ -1787,7 +1793,8 @@
+         }
+     }
+
+-    if (rsrp >= RSRP_MIN) {
++    *rsrp_used = (rsrp >= RSRP_MIN);
++    if (*rsrp_used) {
+         return binder_netreg_dbm_from_rsrp(rsrp);
+     } else if (rscp >= RSCP_MIN) {
+         return binder_netreg_dbm_from_rscp(rscp);
+@@ -1802,11 +1809,15 @@
+ int
+ binder_netreg_percent_from_dbm(
+     BinderNetReg* self,
+-    int dbm)
++    int dbm,
++    gboolean rsrp_used)
+ {
+     const int min_dbm = self->signal_strength_dbm_weak;    /* dBm */
+     const int max_dbm = self->signal_strength_dbm_strong;  /* dBm */
+
++    if (rsrp_used && self->signal_strength_rsrp_calibrated) {
++        return binder_signal_rsrp_quality(dbm, self->signal_strength_rsrp_thresholds);
++    }
+     return (dbm <= min_dbm) ? 1 :
+         (dbm >= max_dbm) ? 100 :
+         (100 * (dbm - min_dbm) / (max_dbm - min_dbm));
+@@ -1823,6 +1834,7 @@
+     BinderNetReg* self = user_data;
+     GBinderReader reader;
+     int dbm = 0;
++    gboolean rsrp_used = FALSE;
+
+     gbinder_reader_copy(&reader, args);
+     if (self->interface_aidl == RADIO_AIDL_INTERFACE_NONE) {
+@@ -1832,7 +1844,7 @@
+
+             if (ss) {
+                 dbm = binder_netreg_get_signal_strength_dbm
+-                    (&ss->gw, &ss->lte, NULL, NULL, NULL);
++                    (&ss->gw, &ss->lte, NULL, NULL, NULL, &rsrp_used);
+             }
+         } else if (code == RADIO_IND_CURRENT_SIGNAL_STRENGTH_1_2) {
+             const RadioSignalStrength_1_2* ss = gbinder_reader_read_hidl_struct
+@@ -1840,7 +1852,7 @@
+
+             if (ss) {
+                 dbm = binder_netreg_get_signal_strength_dbm
+-                    (&ss->gw, &ss->lte, &ss->wcdma, NULL, NULL);
++                    (&ss->gw, &ss->lte, &ss->wcdma, NULL, NULL, &rsrp_used);
+             }
+         } else if (code == RADIO_IND_CURRENT_SIGNAL_STRENGTH_1_4) {
+             const RadioSignalStrength_1_4* ss = gbinder_reader_read_hidl_struct
+@@ -1848,15 +1860,15 @@
+
+             if (ss) {
+                 dbm = binder_netreg_get_signal_strength_dbm
+-                    (&ss->gsm, &ss->lte, &ss->wcdma, &ss->tdscdma, &ss->nr);
++                    (&ss->gsm, &ss->lte, &ss->wcdma, &ss->tdscdma, &ss->nr, &rsrp_used);
+             }
+         }
+     } else {
+-        dbm = binder_netreg_get_signal_strength_dbm_aidl(&reader);
++        dbm = binder_netreg_get_signal_strength_dbm_aidl(&reader, &rsrp_used);
+     }
+
+     if (dbm) {
+-        const int percent = binder_netreg_percent_from_dbm(self, dbm);
++        const int percent = binder_netreg_percent_from_dbm(self, dbm, rsrp_used);
+
+         DBG_(self, "%d dBm (%d%%)", dbm, percent);
+         ofono_netreg_strength_notify(self->netreg, percent);
+@@ -1884,6 +1896,7 @@
+         if (error == RADIO_ERROR_NONE) {
+             GBinderReader reader;
+             int dbm = 0;
++            gboolean rsrp_used = FALSE;
+
+             gbinder_reader_copy(&reader, args);
+             if (self->interface_aidl == RADIO_AIDL_INTERFACE_NONE) {
+@@ -1894,7 +1907,7 @@
+
+                     if (ss) {
+                         dbm = binder_netreg_get_signal_strength_dbm
+-                            (&ss->gw, &ss->lte, NULL, NULL, NULL);
++                            (&ss->gw, &ss->lte, NULL, NULL, NULL, &rsrp_used);
+                     }
+                 } else if (resp == RADIO_RESP_GET_SIGNAL_STRENGTH_1_2) {
+                     const RadioSignalStrength_1_2* ss =
+@@ -1903,7 +1916,7 @@
+
+                     if (ss) {
+                         dbm = binder_netreg_get_signal_strength_dbm
+-                            (&ss->gw, &ss->lte, &ss->wcdma, NULL, NULL);
++                            (&ss->gw, &ss->lte, &ss->wcdma, NULL, NULL, &rsrp_used);
+                     }
+                 } else if (resp == RADIO_RESP_GET_SIGNAL_STRENGTH_1_4) {
+                     const RadioSignalStrength_1_4* ss =
+@@ -1912,17 +1925,17 @@
+
+                     if (ss) {
+                         dbm = binder_netreg_get_signal_strength_dbm
+-                            (&ss->gsm, &ss->lte, &ss->wcdma, &ss->tdscdma, &ss->nr);
++                            (&ss->gsm, &ss->lte, &ss->wcdma, &ss->tdscdma, &ss->nr, &rsrp_used);
+                     }
+                 } else {
+                     ofono_error("Unexpected getSignalStrength response %d", resp);
+                 }
+             } else {
+-                dbm = binder_netreg_get_signal_strength_dbm_aidl(&reader);
++                dbm = binder_netreg_get_signal_strength_dbm_aidl(&reader, &rsrp_used);
+             }
+
+             if (dbm) {
+-                const int percent = binder_netreg_percent_from_dbm(self, dbm);
++                const int percent = binder_netreg_percent_from_dbm(self, dbm, rsrp_used);
+
+                 /* Success */
+                 DBG_(self, "%d dBm (%d%%)", dbm, percent);
+@@ -2179,6 +2192,9 @@
+     self->replace_strange_oper = config->replace_strange_oper;
+     self->signal_strength_dbm_weak = config->signal_strength_dbm_weak;
+     self->signal_strength_dbm_strong = config->signal_strength_dbm_strong;
++    self->signal_strength_rsrp_calibrated = config->signal_strength_rsrp_calibrated;
++    memcpy(self->signal_strength_rsrp_thresholds, config->signal_strength_rsrp_thresholds,
++        sizeof(self->signal_strength_rsrp_thresholds));
+     self->network_selection_timeout_ms = config->network_selection_timeout_ms;
+
+     ofono_netreg_set_data(netreg, self);

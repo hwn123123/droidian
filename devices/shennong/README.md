@@ -357,7 +357,7 @@ sudo bash devices/shennong/tools/build-ofono-plugin.sh /path/to/droidian-build-r
 ```
 
 The helper pins upstream commit `9b9e8bd2ffc8a6ba482d6daf7171fd84ba82c3b8`,
-runs its tests and builds a `+shennong2` Debian package. Also run
+runs its tests and builds a `+shennong3` Debian package. Also run
 `sudo bash devices/shennong/tools/build-ofono2mm.sh` to package the isolated
 address-prefix, network-port and late SIM-property refresh fixes against the pinned
 upstream modem bridge. It produces a `+shennong15` package. Device image preparation
@@ -366,6 +366,36 @@ For a rebuild with inputs already cached, set `SHENNONG_OFFLINE=1`; the helper
 still verifies the archive signature and all cached package hashes.
 Changes to the upstream plugin are kept as a separate patch; the stock
 Android Radio binaries and modem firmware are used unchanged. Both SIM slots use stable AIDL on `/dev/binder`.
+
+The optional `signalStrengthRsrpThresholds` slot setting calibrates only valid
+LTE/NR RSRP measurements. The device profile uses `[-125,-115,-110,-105]` dBm,
+the four default display thresholds verified in the original CN firmware's
+`MiuiSignalStrengthUtils` (input hash and scope are recorded in
+`reference/cn-signal-calibration-os309.json`). Runtime carrier/feature-service
+overrides may use different values; this profile implements the verified
+defaults, not every possible operator customization.
+
+Previously the generic oFono range `[-100,-60]` dBm was mapped linearly to
+0–100%, then Phosh split that percentage into bars. For example, -85 dBm
+became 37%, producing two bars instead of the CN default's four. The native
+radio adapter now performs the configured four-level conversion once and
+exports 0/25/50/75/100 through the normal Strength/SignalQuality properties.
+Phosh and Settings consume the same backend value. Unreported/out-of-range
+measurements are never raised to full signal; RSSI/RSCP and installations
+without the optional setting retain upstream behavior. No transmitter power,
+band preference, network selection, modem firmware or raw radio reading is
+changed. Policy boundary and invalid-value tests run as part of the plugin
+build, followed by the upstream unit suite.
+
+On 2026-11-14 adaptation 0.1.18 with Binder plugin `+shennong3` was installed
+on the device. Before applying it the NR Strength was 27%; after restarting
+the native radio service, the SIM registered again, mobile data reached
+`CONNECTED`, and oFono Strength plus ModemManager SignalQuality both reported
+100% under the new RSRP policy. This validates the common backend path;
+weak/unknown/boundary behavior is covered by the policy test, not a claimed
+field test in every coverage condition. The owner also confirmed that the
+status-bar indication now looks normal and closer to the CN firmware.
+
 The first initialized SIM is selected once through oFono's own default;
 subsequent SIM and APN choices remain under the desktop's normal controls.
 UPower retains its upstream service credentials and sandbox, with only

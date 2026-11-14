@@ -22,6 +22,11 @@ git -C "$cache" archive "$revision" | tar -x -C "$work"
 for patch in "$here/../patches/ofono-binder-plugin/"*.patch; do
     patch -d "$work" -p1 < "$patch"
 done
+cp "$here/../tests/test_signal_calibration.c" "$work/"
+chroot "$root" cc -std=c11 -Wall -Wextra -Werror \
+    -I"/$(basename "$work")/src" "/$(basename "$work")/test_signal_calibration.c" \
+    -o "/$(basename "$work")/test_signal_calibration"
+chroot "$root" "/$(basename "$work")/test_signal_calibration"
 chroot "$root" make -C "/$(basename "$work")" -j"$(nproc)" release
 chroot "$root" make -C "/$(basename "$work")" -j"$(nproc)" test
 python3 - "$repo" "$work" "$revision" <<'PY'
@@ -36,7 +41,7 @@ if '9b9e8bd' not in base['version']:
 archive = inputs / 'packages' / Path(base['filename']).name
 if hashlib.sha256(archive.read_bytes()).hexdigest() != base['sha256']:
     raise SystemExit('Upstream plugin package checksum mismatch')
-version = base['version'] + '+shennong2'
+version = base['version'] + '+shennong3'
 out = repo / 'out/shennong/telephony-packages'
 out.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='shennong-radio-') as temporary:

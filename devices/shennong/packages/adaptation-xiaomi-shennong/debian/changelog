@@ -1,3 +1,10 @@
+adaptation-xiaomi-shennong (0.1.18) unstable; urgency=medium
+
+  * Select the original CN firmware's default LTE/NR RSRP display calibration
+    through the native Binder radio configuration on both SIM slots.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 10:00:00 +0800
+
 adaptation-xiaomi-shennong (0.1.17) unstable; urgency=medium
 
   * Default location access and automatic clock geolocation to disabled through

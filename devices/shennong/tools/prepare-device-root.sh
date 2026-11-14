@@ -76,7 +76,7 @@ bash "$here/install-audio-compat.sh" "$root"
 bash "$here/install-binder-compat.sh" "$root"
 bash "$here/install-usb-framework.sh" "$root"
 bash "$here/install-cellular-runtime.sh" "$root"
-radio_packages=("$repo/out/shennong/telephony-packages/"ofono-binder-plugin_*+shennong2_arm64.deb)
+radio_packages=("$repo/out/shennong/telephony-packages/"ofono-binder-plugin_*+shennong3_arm64.deb)
 [ "${#radio_packages[@]}" = 1 ] && [ -s "${radio_packages[0]}" ] || {
     echo 'Build the device AIDL plugin with tools/build-ofono-plugin.sh first.' >&2
     exit 1

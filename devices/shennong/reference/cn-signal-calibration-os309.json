@@ -1,0 +1,22 @@
+{
+  "firmware": "OS3.0.309.0.WNBCNXM_16.0 (CN)",
+  "input": "system_ext/framework/miui-framework.jar",
+  "sha256": "ff1049338f81e2212bbf7674b499ca875b2bb5ef4ac1bbc1f241a9ac9f47ee80",
+  "source_class": "android.telephony.MiuiSignalStrengthUtils",
+  "default_lte_rsrp_display_thresholds_dbm": [
+    -125,
+    -115,
+    -110,
+    -105
+  ],
+  "default_nr_ssrsrp_display_thresholds_dbm": [
+    -125,
+    -115,
+    -110,
+    -105
+  ],
+  "default_signal_bars": 4,
+  "default_use_rsrp_and_sinr": false,
+  "scope": "Verified offline firmware defaults. Runtime carrier/feature-service overrides may differ; this profile does not claim to reproduce those overrides.",
+  "implementation": "Optional device policy in the native oFono Binder plugin. Only valid LTE/NR RSRP readings use this policy; RSSI/RSCP retain upstream conversion. Raw radio measurements and network selection are unchanged."
+}
