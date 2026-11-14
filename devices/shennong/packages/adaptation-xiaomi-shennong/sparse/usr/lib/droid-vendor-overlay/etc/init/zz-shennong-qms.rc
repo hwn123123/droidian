@@ -1,0 +1,10 @@
+# The minimized Android rootfs does not mount the stock Tethering APEX. The
+# exact stock dependency is staged under shennong-cellular for NICM; QMS also
+# links it, so give only this vendor service access to the private library dir.
+service vendor.qms /vendor/bin/qms
+    override
+    class main
+    user radio
+    group radio wakelock wifi inet net_admin
+    capabilities BLOCK_SUSPEND NET_ADMIN
+    setenv LD_LIBRARY_PATH /vendor/lib64/shennong-cellular:/vendor/lib64:/system/lib64

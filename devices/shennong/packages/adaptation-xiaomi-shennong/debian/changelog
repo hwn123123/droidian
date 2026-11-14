@@ -1,3 +1,10 @@
+adaptation-xiaomi-shennong (0.1.25) unstable; urgency=medium
+
+  * Scope the captured Tethering APEX dependency path to the stock QMS service
+    so the modem QoS daemon can load without changing the vendor binaries.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 13:30:00 +0800
+
 adaptation-xiaomi-shennong (0.1.24) unstable; urgency=medium
 
   * Load the stock NXP NFC driver before the Android HAL starts and retain

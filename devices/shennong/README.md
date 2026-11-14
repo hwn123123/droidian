@@ -210,6 +210,16 @@ over the restored mobile connection returned 204.
 The final 0.1.24 boot also confirmed that the withdrawn task-profile overlay
 was absent from both the host adaptation directory and Android's vendor view.
 
+The log audit found `/vendor/bin/qms` exiting before initialization because the
+minimized Android rootfs does not include the Tethering APEX. Its exact stock
+`libcom.android.tethering.connectivity_native.so` dependency is already staged
+and hash-checked for the cellular runtime. Adaptation 0.1.25 adds that private
+library directory only to the stock QMS service's linker path; it does not
+replace the daemon, alter its arguments or change the shared linker config.
+With the same library path, a direct QMS launch passed the previous immediate
+linker failure and remained alive for the five-second diagnostic window. The
+next boot must still confirm service registration and modem QoS behavior.
+
 ### Vendor RPC dependencies and log audit
 
 ADSP being online does not mean the optional FastRPC transport is available.
