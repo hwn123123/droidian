@@ -155,6 +155,66 @@ They are defaults: later changes in Phosh/GNOME settings take precedence and
 are not reset at login or boot. Wallpaper provenance and its generation prompt
 are included alongside the asset in the adaptation package.
 
+### Native Bluetooth transport
+
+The stock kernel omits `CONFIG_BT_HCIVHCI`, which Droidian's existing
+`bluebinder` needs to expose the HIDL controller to BlueZ. The display config
+now selects that native module. `build-bluetooth-compat.sh` also builds the
+unmodified, hash-checked `hci_vhci.c` against the current kernel ABI for image
+updates that do not otherwise require a kernel change. Image preparation
+installs the module and its normal modules-load configuration automatically.
+
+Native udev rules retain the captured vendor ownership for `btpower`,
+`btfmslim`, `btfmcodec_dev` and the Bluetooth UART. The bridge is ordered after
+the existing audio hardware stage, which loads the shared power/transport
+drivers, and waits for pending udev events. Without this handoff, cold boot
+opened root-only nodes before the controller was usable; HAL initialization
+failed even though its Binder service was already registered.
+
+The controller supplies its real address through HCI, so this device skips
+the legacy property/file address injection hook. BlueZ's standard
+`AutoEnable=false` setting leaves activation to GNOME Settings; it does not
+disable the service or replace the distribution's radio controls. No hardware
+address or pairing information is stored in Git. Initialization, discovery of
+nearby devices and returning the radio to off were verified on 2026-11-14.
+Pairing and Bluetooth audio still need their own tests.
+
+With adaptation 0.1.20, a fresh boot initialized the controller in about four
+seconds, kept the radio off, and recreated the captured device permissions
+without manual commands. The native power on/off controls also passed.
+
+### Vendor RPC dependencies and log audit
+
+ADSP being online does not mean the optional FastRPC transport is available.
+The captured RPC clients otherwise retry missing device nodes every 25 ms.
+A five-second sample found about 0.55 CPU core consumed by the four clients
+alone, with additional logging overhead. The native host handoff now publishes
+separate ADSP/CDSP RPC readiness only when the corresponding DSP is running
+and the FastRPC character transport exists.
+
+At image-build time, `install-rpc-service-policy.sh` derives four init files
+from hash-checked private vendor inputs. Their original executables, arguments,
+users, groups and capabilities are preserved; eager startup is replaced with
+Android init's existing property start/stop triggers. These derived files use
+the existing read-only vendor overlay. The vendor images and binaries are
+unchanged, and no runtime watchdog or log filter is added. Missing hardware
+readiness remains visible in the boot journal. Changed vendor inputs are
+rejected instead of silently receiving an unmatched policy.
+
+The first fresh boot with this policy left all four clients stopped while
+their dependencies were unavailable; the previous retry load disappeared and
+the native audio card, cellular connection and USB management returned. The
+stock HVC stub also caused getty-generator to start a console without an active
+backend. Its unit now checks the kernel's registered active consoles before
+starting a login process.
+
+This dependency correction does not implement FastRPC. Its safe driver
+handoff, sensor/fingerprint/NFC integration and camera support remain separate
+unfinished work. Actual service and hardware errors are retained. A separate
+cold-boot display problem also remains under investigation: the shell and
+USB are running, but the panel can stay dark until the compositor is
+reinitialized. No startup restart loop is installed to conceal that failure.
+
 ### Panel brightness
 
 For the primary `HWCOMPOSER-1` output, Phosh first tries its existing Linux

@@ -32,6 +32,24 @@ if [ "$(lxc-info -n android -sH 2>/dev/null || true)" != RUNNING ]; then
 fi
 for ((attempt=0; attempt<30; attempt++)); do
     if timeout 2 lxc-attach -n android -- /system/bin/setprop vendor.all.modules.ready 1; then
+        # A running ADSP does not imply that its optional FastRPC transport exists.
+        # Publish separate producer readiness instead of starting 25 ms retry loops.
+        rpc_node=0
+        for node in /dev/fastrpc-smd /dev/adsprpc-smd; do
+            [ ! -c "$node" ] || rpc_node=1
+        done
+        for domain in adsp cdsp; do
+            ready=0
+            for remote in /sys/class/remoteproc/remoteproc*; do
+                if [[ $(cat "$remote/name") == *"remoteproc-$domain" &&
+                      $(cat "$remote/state") == running && $rpc_node == 1 ]]; then
+                    ready=1
+                fi
+            done
+            timeout 2 lxc-attach -n android -- /system/bin/setprop \
+                "vendor.shennong.${domain}_rpc.ready" "$ready"
+            [ "$ready" = 1 ] || echo "$domain FastRPC is unavailable; dependent services are waiting"
+        done
         echo 'Host drivers verified; Android module-ready notification delivered'
         exit 0
     fi

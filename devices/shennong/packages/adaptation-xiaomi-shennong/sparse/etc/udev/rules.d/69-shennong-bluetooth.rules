@@ -1,0 +1,3 @@
+# Preserve the captured vendor's Bluetooth device-node ownership on the host.
+KERNEL=="btpower|btfmslim|btfmcodec_dev", OWNER="bluetooth", GROUP="system", MODE="0660"
+KERNEL=="ttyHS0", OWNER="bluetooth", GROUP="android_net_bt", MODE="0660"

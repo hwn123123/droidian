@@ -1,3 +1,21 @@
+adaptation-xiaomi-shennong (0.1.20) unstable; urgency=medium
+
+  * Apply the captured Bluetooth device ownership through native udev rules.
+  * Order the Bluetooth bridge after its power/transport driver handoff and
+    settle pending device events before opening the stock controller.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 10:35:00 +0800
+
+adaptation-xiaomi-shennong (0.1.19) unstable; urgency=medium
+
+  * Provide the native VHCI transport required by Droidian's Bluetooth bridge.
+    Use the controller's HCI address and leave radio activation to Settings.
+  * Start vendor RPC clients only after their DSP and FastRPC dependencies are
+    available, preserving the original service executables and privileges.
+  * Do not start the hypervisor console getty when its device is absent.
+
+ -- Ning <hwn123123@users.noreply.github.com>  Sat, 14 Nov 2026 10:30:00 +0800
+
 adaptation-xiaomi-shennong (0.1.18) unstable; urgency=medium
 
   * Select the original CN firmware's default LTE/NR RSRP display calibration

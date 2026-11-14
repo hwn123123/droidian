@@ -1,0 +1,26 @@
+{
+  "vendor.qti.adsprpc-guestos-service.rc": {
+    "sha256": "540de9b329ea8bc4664b79cd80d3867a865e14d6fea8c430d1e75d98c796c829",
+    "service": "vendor.adsprpcd",
+    "argv": "/vendor/bin/adsprpcd",
+    "ready": "vendor.shennong.adsp_rpc.ready"
+  },
+  "vendor.qti.audio-adsprpc-service.rc": {
+    "sha256": "b2c6180a4ba5764b4ad3c4e1cb58da716f8c8cee2298868f690706195b54200a",
+    "service": "vendor.audioadsprpcd_audiopd",
+    "argv": "/vendor/bin/audioadsprpcd audiopd",
+    "ready": "vendor.shennong.adsp_rpc.ready"
+  },
+  "vendor.qti.cdsprpc-service.rc": {
+    "sha256": "c59f51024992a13aac0b5ff7a5ed90e31b06daef4881fed173ffbdd822c72a19",
+    "service": "vendor.cdsprpcd",
+    "argv": "/vendor/bin/cdsprpcd",
+    "ready": "vendor.shennong.cdsp_rpc.ready"
+  },
+  "vendor.sensors.sscrpcd.rc": {
+    "sha256": "229f1998520806f079318a0053ee125f24c23746ad0704e2dfd525f59b62d701",
+    "service": "vendor.sensors",
+    "argv": "/vendor/bin/sscrpcd sensorspd",
+    "ready": "vendor.shennong.adsp_rpc.ready"
+  }
+}

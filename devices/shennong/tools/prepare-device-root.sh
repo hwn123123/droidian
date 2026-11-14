@@ -73,6 +73,8 @@ chroot "$root" /bin/sh -c 'dpkg --force-confnew -i /var/cache/shennong-adaptatio
 rm -r "$root/var/cache/shennong-adaptation"
 bash "$here/install-wifi-config.sh" "$root"
 bash "$here/install-audio-compat.sh" "$root"
+bash "$here/install-bluetooth-compat.sh" "$root"
+bash "$here/install-rpc-service-policy.sh" "$root"
 bash "$here/install-binder-compat.sh" "$root"
 bash "$here/install-usb-framework.sh" "$root"
 bash "$here/install-cellular-runtime.sh" "$root"
