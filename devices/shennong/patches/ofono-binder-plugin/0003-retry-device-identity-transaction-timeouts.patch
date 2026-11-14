@@ -1,0 +1,46 @@
+From: Ning <hwn123123@users.noreply.github.com>
+Subject: [PATCH] plugin: retry device identity after radio transaction timeout
+
+The Radio service can be published before QCRIL is ready to answer requests.
+libgbinder-radio completes transaction timeouts directly, so the configured
+request retry policy does not retry them. Re-submit the identity request after
+a timeout while the modem Binder client remains connected. This lets oFono
+publish the slot once modem initialization completes, without a service restart.
+
+diff --git a/src/binder_plugin.c b/src/binder_plugin.c
+--- a/src/binder_plugin.c
++++ b/src/binder_plugin.c
+@@ -354,6 +354,13 @@
+ void
+ binder_plugin_slot_check_radio_client(
+     BinderSlot* slot);
+ 
++static
++void
++binder_plugin_slot_get_device_identity(
++    BinderSlot* slot,
++    gboolean blocking,
++    int retries);
++
+ static
+ void
+@@ -968,6 +968,19 @@
+     } else {
+         ofono_error("getDeviceIdentity error %d", status);
+     }
+ 
++    /*
++     * Binder may publish IRadioModem before QCRIL is ready to answer
++     * transactions. libgbinder-radio completes transaction timeouts
++     * directly, so request retry settings do not cover this case.
++     */
++    if (status == RADIO_TX_STATUS_TIMEOUT &&
++        radio_client_connected(slot->client[binder_plugin_interface_index(
++            slot, binder_plugin_modem_interface(slot))])) {
++        ofono_warn("getDeviceIdentity timed out for %s; retrying",
++            slot->name);
++        binder_plugin_slot_get_device_identity(slot, TRUE, -1);
++    }
++
+     binder_plugin_slot_startup_check(slot);
+ }

@@ -500,7 +500,12 @@ sudo bash devices/shennong/tools/build-ofono-plugin.sh /path/to/droidian-build-r
 ```
 
 The helper pins upstream commit `9b9e8bd2ffc8a6ba482d6daf7171fd84ba82c3b8`,
-runs its tests and builds a `+shennong3` Debian package. Also run
+runs its tests and builds a `+shennong4` Debian package. The isolated plugin
+patch retries `getDeviceIdentity` after an AIDL transaction timeout: Android
+may publish the Radio service before QCRIL is ready, and the library's normal
+retry policy does not cover timed-out transactions. The retry keeps the native
+oFono slot unpublished until the modem answers; it does not change radio power,
+SIM selection, network mode, or registration policy. Also run
 `sudo bash devices/shennong/tools/build-ofono2mm.sh` to package the isolated
 address-prefix, network-port and late SIM-property refresh fixes against the pinned
 upstream modem bridge. It produces a `+shennong16` package. Device image preparation
@@ -538,6 +543,17 @@ the native radio service, the SIM registered again, mobile data reached
 weak/unknown/boundary behavior is covered by the policy test, not a claimed
 field test in every coverage condition. The owner also confirmed that the
 status-bar indication now looks normal and closer to the CN firmware.
+
+A later boot exposed an AIDL startup race: `IRadioModem/slot1` was published,
+but the first `getDeviceIdentity` transaction timed out before QCRIL was ready.
+The request library retried modem error responses, but completed transaction
+timeouts without retrying, leaving oFono with no modem for the bridge to expose.
+The `+shennong4` Binder plugin patch resubmits that identity request after a
+timeout while the radio Binder client remains connected. After installing it,
+the ordinary oFono service reload published both slots; SIM1 registered on
+CMCC NR, NetworkManager activated the mobile bearer, and HTTP/HTTPS probes
+returned 204/200. That reload confirms normal operation after the patch; a
+full cold-boot validation is still pending.
 
 The first initialized SIM is selected once through oFono's own default;
 subsequent SIM and APN choices remain under the desktop's normal controls.

@@ -41,7 +41,7 @@ if '9b9e8bd' not in base['version']:
 archive = inputs / 'packages' / Path(base['filename']).name
 if hashlib.sha256(archive.read_bytes()).hexdigest() != base['sha256']:
     raise SystemExit('Upstream plugin package checksum mismatch')
-version = base['version'] + '+shennong3'
+version = base['version'] + '+shennong4'
 out = repo / 'out/shennong/telephony-packages'
 out.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='shennong-radio-') as temporary:
