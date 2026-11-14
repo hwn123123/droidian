@@ -222,10 +222,10 @@ next boot must still confirm service registration and modem QoS behavior.
 
 Other boot errors are confirmed gaps and remain visible for follow-up:
 
-* `droidian-fpd` waits for the legacy fingerprint HIDL 2.1 service, while this
-  vendor image registers the AIDL `IFingerprint/default` service. The daemon
-  fails before exposing fingerprint support; an AIDL-to-D-Bus bridge remains
-  unimplemented.
+* The original `droidian-fpd` HIDL wait has been replaced by the native AIDL
+  transport described below. A real finger completed enrollment and was
+  saved by the native settings panel. The hardware matched it at the lockscreen,
+  and the user confirmed that fingerprint authentication unlocked the session.
 * The Android vendor init requests `INwMgr`, `IQHDC` and `IQesdSys` AIDL
   services that are absent from the imported image. Their intended vendor
   implementations are still unidentified.
@@ -233,6 +233,67 @@ Other boot errors are confirmed gaps and remain visible for follow-up:
   `cpuset` and `cpuctl`) unavailable in this host's unified hierarchy. The
   attempted cgroup-v2 profile substitution was withdrawn because Android's
   `JoinCgroup` action ignored it; these warnings are not filtered.
+
+### Native AIDL fingerprint compatibility
+
+`tools/build-fingerprint-aidl.py` builds the libhybris transport from pinned
+AOSP AIDL definitions and the local stock `libbinder_ndk.so` input. Run it with
+`ANDROID_NDK_ROOT` and an SDK 36 `AIDL` compiler path. It writes generated code
+and libraries below the selected `out/` directory. No vendor binaries or
+credentials are published.
+
+Build `droidian-fpd` with `tools/build-fingerprint-daemon.sh LIBRARY` inside
+the matching Droidian arm64 snapshot. `install-fingerprint-packages.sh` adds
+that package during offline image preparation. Both native FPD and its
+existing session unlocker wait for the actual AIDL service.
+
+The adapter preserves the daemon's Android fingerprint group **0**. Its
+Linux/store and Gatekeeper identity remains **100000**. Passing the Linux
+identity as the AIDL session's Android group caused Goodix's secure
+application to reject enrollment with `GF_ERROR_INVALID_DATA` (1024).
+Group 0 passed enrollment initialization on the same device. Android
+`/data` is bound from B's private container data, including its own
+`vendor_de/0/fpdata`; no A-slot userdata is used by this adapter.
+
+Gatekeeper enrollment uses a random persistent credential protected by root
+mode 0600 in the private Linux container data. Its opaque password handle is
+retained so later enrollments preserve the secure identity. The bridge checks
+the returned challenge and MAC length. A temporary, subsequently deleted
+KeyMint operation verified that the actual Gatekeeper token is accepted by
+the TEE. No token, password or template is logged or shipped in the package.
+The minimized Android image omits keystore2, so the adapter initializes the
+TEE's public ISharedSecret interface. StrongBox is outside this transport's
+scope and did not complete its separate initialization probe.
+
+Phosh's native fingerprint manager uses FPD's state signals and the sensor
+location reported by the real HAL. It presents a small layer surface at the
+physical sensor, forwards touches via the AIDL session, and signals UI ready
+after painting. The stock daemon also requires its public Xiaomi fingerprint
+extension: standard AIDL pointer calls alone did not enable touch detection.
+The native adapter now supplies FodEngineCore's operation state (command 4),
+display-on state (3=2) and actual presentation visibility (1). Phosh reports
+visibility from its mapped surface and monitor power state. On 2026-11-14 the
+installed `+shennong3` FPD / `+shennong14` Phosh packages produced the real
+`TouchEnable:1` / `HandleFodTouchCtl:1` callbacks on entry and the corresponding
+zero callbacks on cancellation. The local AIDL definition declares only the
+observed `extCmd(int, int) -> int` Binder ABI, with no vendor library bundled.
+Local HBM is enabled only for contact during a live operation.
+Release, cancellation, HAL errors, successful enrollment/matching, screen off
+and normal daemon shutdown release local illumination. Binder callbacks are
+queued onto FPD's Qt thread. The libhybris bridge uses the supported
+`pthread_cond_timedwait` path instead of `pthread_cond_clockwait`.
+
+The actual hardware reports sensor 5, optical UDFPS, strength STRONG,
+coordinates (720, 2529), radius 123 and up to five enrollments. These values
+are discovered, not substituted for enrollment or match results. After the
+FodEngine visibility repair, real physical touches returned `ACQUIRED_GOOD`,
+advanced the reported remaining count to zero, and saved one template through
+the native settings panel on 2026-11-14. The subsequent lockscreen test returned
+the HAL's matching template ID, the native session unlocker received `Identified`,
+and the user confirmed a successful fingerprint unlock. No success result is
+synthesized by the adapter. Restarting the native FPD service retained and
+re-enumerated the saved template; the display's local HBM remained off afterward.
+Full-device cold-boot retention is not yet tested.
 
 ### Network and camera module initialization
 
@@ -272,7 +333,7 @@ The pinned Phosh build now applies the phone home, backlight, edge navigation
 and lock-screen status patches in `patches/phosh/`. Build it with
 `tools/build-phosh.sh`; `tools/install-ui-packages.py` installs the matching
 shell, common files, plugins, mobile tweaks and libphosh package into an
-offline device image. The final UI package version is `+shennong12`.
+offline device image. The final UI package version is `+shennong14`.
 
 Adaptation 0.1.28 defaults to Inter 15 / Noto Sans CJK SC 15, Monospace 13 and
 native text scaling 1.15. These remain normal GNOME settings and can be

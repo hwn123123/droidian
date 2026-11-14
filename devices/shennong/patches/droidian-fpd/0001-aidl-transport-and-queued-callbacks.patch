@@ -1,0 +1,283 @@
+diff --git a/debian/droidian-fpd.droidian-fpd.service b/debian/droidian-fpd.droidian-fpd.service
+index acbf930..6142f50 100644
+--- a/debian/droidian-fpd.droidian-fpd.service
++++ b/debian/droidian-fpd.droidian-fpd.service
+@@ -5,7 +5,7 @@ After=lxc@android.service
+ [Service]
+ Type=dbus
+ BusName=org.droidian.fingerprint
+-ExecStartPre=/usr/bin/binder-wait android.hardware.biometrics.fingerprint@2.1::IBiometricsFingerprint/default
++ExecStartPre=/usr/bin/binder-wait -d /dev/binder android.hardware.biometrics.fingerprint.IFingerprint/default
+ ExecStart=/usr/bin/droidian-fpd
+ Restart=on-abnormal
+ RestartSec=5
+diff --git a/src/androidfp.cpp b/src/androidfp.cpp
+index 95a9de3..9443f09 100644
+--- a/src/androidfp.cpp
++++ b/src/androidfp.cpp
+@@ -44,6 +44,9 @@ std::string IntToStringRequestStatus(int error){
+ 
+ AndroidFP::AndroidFP(QObject *parent) : QObject(parent), m_biometry(u_hardware_biometry_new())
+ {
++    if (!m_biometry)
++        qFatal("Unable to connect to fingerprint HAL");
++
+     //Set up the callbacks
+     fp_params.enrollresult_cb = enrollresult_cb;
+     fp_params.acquired_cb = acquired_cb;
+@@ -55,6 +58,38 @@ AndroidFP::AndroidFP(QObject *parent) : QObject(parent), m_biometry(u_hardware_b
+     u_hardware_biometry_setNotify(m_biometry, &fp_params);
+ }
+ 
++AndroidFP::~AndroidFP()
++{
++    if (m_biometry) u_hardware_biometry_cancel(m_biometry);
++}
++
++QVariantMap AndroidFP::sensorLocation() const
++{
++    int32_t position[3];
++    if (u_hardware_biometry_sensorLocation(m_biometry, position) != SYS_OK) return {};
++    return {{"x", position[0]}, {"y", position[1]}, {"radius", position[2]}};
++}
++
++int AndroidFP::pointerDown(int x, int y)
++{
++    return u_hardware_biometry_pointerDown(m_biometry, x, y);
++}
++
++int AndroidFP::pointerUp()
++{
++    return u_hardware_biometry_pointerUp(m_biometry);
++}
++
++int AndroidFP::uiReady()
++{
++    return u_hardware_biometry_uiReady(m_biometry);
++}
++
++int AndroidFP::uiVisible(bool visible)
++{
++    return u_hardware_biometry_uiVisible(m_biometry, visible);
++}
++
+ QString AndroidFP::getDefaultGroupPath(uint32_t uid)
+ {
+     util::AndroidPropertyStore store;
+@@ -95,8 +130,8 @@ void AndroidFP::setGroup(uint32_t gid, const QString &storePath)
+ void AndroidFP::enroll(uid_t user_id)
+ {
+     qDebug() << Q_FUNC_INFO << user_id;
+-    UHardwareBiometryRequestStatus ret = u_hardware_biometry_enroll(m_biometry, 0, 60, user_id);
+     m_enrollRemaining = 0;
++    UHardwareBiometryRequestStatus ret = u_hardware_biometry_enroll(m_biometry, 0, 60, user_id);
+     if (ret != SYS_OK) {
+         failed(QString::fromUtf8(IntToStringRequestStatus(ret).data()));
+     }
+@@ -204,38 +239,52 @@ void AndroidFP::acquiredCallback(UHardwareBiometryFingerprintAcquiredInfo info)
+ void AndroidFP::enrollresult_cb(uint64_t, uint32_t fingerId, uint32_t, uint32_t remaining, void *context)
+ {
+     qDebug() << Q_FUNC_INFO << fingerId << remaining;
+-    static_cast<AndroidFP*>(context)->enrollCallback(fingerId, remaining);
++    auto self = static_cast<AndroidFP*>(context);
++    QMetaObject::invokeMethod(self, [self, fingerId, remaining] {
++        self->enrollCallback(fingerId, remaining);
++    }, Qt::QueuedConnection);
+ }
+ 
+ void AndroidFP::acquired_cb(uint64_t, UHardwareBiometryFingerprintAcquiredInfo info, int32_t, void *context)
+ {
+     qDebug() << Q_FUNC_INFO << info;
+-    static_cast<AndroidFP*>(context)->acquiredCallback(info);
++    auto self = static_cast<AndroidFP*>(context);
++    QMetaObject::invokeMethod(self, [self, info] {
++        self->acquiredCallback(info);
++    }, Qt::QueuedConnection);
+ }
+ 
+ void AndroidFP::authenticated_cb(uint64_t, uint32_t fingerId, uint32_t, void *context)
+ {
+     qDebug() << Q_FUNC_INFO << fingerId;
+ 
+-    if (fingerId != 0)
+-        static_cast<AndroidFP*>(context)->authenticated(fingerId);
+-    else {
+-        static_cast<AndroidFP*>(context)->failed("FINGER_NOT_RECOGNIZED");
+-    }
++    auto self = static_cast<AndroidFP*>(context);
++    QMetaObject::invokeMethod(self, [self, fingerId] {
++        if (fingerId != 0)
++            emit self->authenticated(fingerId);
++        else
++            emit self->failed("FINGER_NOT_RECOGNIZED");
++    }, Qt::QueuedConnection);
+ }
+ 
+ void AndroidFP::removed_cb(uint64_t, uint32_t fingerId, uint32_t, uint32_t remaining, void *context)
+ {
+     qDebug() << Q_FUNC_INFO << fingerId << remaining;
+ 
+-    static_cast<AndroidFP*>(context)->removeCallback(fingerId, remaining);
++    auto self = static_cast<AndroidFP*>(context);
++    QMetaObject::invokeMethod(self, [self, fingerId, remaining] {
++        self->removeCallback(fingerId, remaining);
++    }, Qt::QueuedConnection);
+ }
+ 
+ void AndroidFP::enumerate_cb(uint64_t, uint32_t fingerId, uint32_t, uint32_t remaining, void *context)
+ {
+     qDebug() << Q_FUNC_INFO << fingerId << remaining;
+ 
+-    static_cast<AndroidFP*>(context)->enumerateCallback(fingerId, remaining);
++    auto self = static_cast<AndroidFP*>(context);
++    QMetaObject::invokeMethod(self, [self, fingerId, remaining] {
++        self->enumerateCallback(fingerId, remaining);
++    }, Qt::QueuedConnection);
+ }
+ 
+ void AndroidFP::error_cb(uint64_t, UHardwareBiometryFingerprintError error, int32_t vendorCode, void *context)
+@@ -244,5 +293,8 @@ void AndroidFP::error_cb(uint64_t, UHardwareBiometryFingerprintError error, int3
+     if (error == 0) {
+         return;
+     }
+-    static_cast<AndroidFP*>(context)->failed(QString::fromUtf8(IntToStringFingerprintError(error, vendorCode).data()));
++    auto self = static_cast<AndroidFP*>(context);
++    QMetaObject::invokeMethod(self, [self, error, vendorCode] {
++        emit self->failed(QString::fromStdString(IntToStringFingerprintError(error, vendorCode)));
++    }, Qt::QueuedConnection);
+ }
+diff --git a/src/androidfp.h b/src/androidfp.h
+index c1b1042..e3ead00 100644
+--- a/src/androidfp.h
++++ b/src/androidfp.h
+@@ -4,6 +4,7 @@
+ #include <QObject>
+ #include <QList>
+ #include <QString>
++#include <QVariantMap>
+ 
+ #include "biometry.h"
+ 
+@@ -12,6 +13,12 @@ class AndroidFP : public QObject
+     Q_OBJECT
+ public:
+     explicit AndroidFP(QObject *parent = nullptr);
++    ~AndroidFP();
++    QVariantMap sensorLocation() const;
++    int pointerDown(int x, int y);
++    int pointerUp();
++    int uiReady();
++    int uiVisible(bool visible);
+     void setGroup(uint32_t gid, const QString &storePath);
+     void enroll(uid_t user_id);
+     void remove(uid_t finger);
+diff --git a/src/biometry.h b/src/biometry.h
+index c5a049b..1f89451 100644
+--- a/src/biometry.h
++++ b/src/biometry.h
+@@ -145,6 +145,17 @@ u_hardware_biometry_setActiveGroup(UHardwareBiometry self, uint32_t gid, char *s
+ UHardwareBiometryRequestStatus
+ u_hardware_biometry_authenticate(UHardwareBiometry self, uint64_t operationId, uint32_t gid);
+ 
++UHardwareBiometryRequestStatus
++u_hardware_biometry_sensorLocation(UHardwareBiometry self, int32_t *position);
++UHardwareBiometryRequestStatus
++u_hardware_biometry_pointerDown(UHardwareBiometry self, int32_t x, int32_t y);
++UHardwareBiometryRequestStatus
++u_hardware_biometry_pointerUp(UHardwareBiometry self);
++UHardwareBiometryRequestStatus
++u_hardware_biometry_uiReady(UHardwareBiometry self);
++UHardwareBiometryRequestStatus
++u_hardware_biometry_uiVisible(UHardwareBiometry self, int32_t visible);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/src/fpdcommunity.cpp b/src/fpdcommunity.cpp
+index e3f0ae4..251a044 100644
+--- a/src/fpdcommunity.cpp
++++ b/src/fpdcommunity.cpp
+@@ -216,6 +216,35 @@ void FPDCommunity::loadFingers()
+     qDebug() << "Loaded finger map:" << m_fingerMap;
+ }
+ 
++QVariantMap FPDCommunity::GetSensorLocation()
++{
++    return m_androidFP.sensorLocation();
++}
++
++int FPDCommunity::PointerDown(int x, int y)
++{
++    if (m_state != FPSTATE_ENROLLING && m_state != FPSTATE_IDENTIFYING && m_state != FPSTATE_VERIFYING)
++        return SYS_EBUSY;
++    return m_androidFP.pointerDown(x, y);
++}
++
++int FPDCommunity::PointerUp()
++{
++    return m_androidFP.pointerUp();
++}
++
++int FPDCommunity::UiReady()
++{
++    return m_androidFP.uiReady();
++}
++
++int FPDCommunity::SetUiVisible(bool visible)
++{
++    if (visible && m_state != FPSTATE_ENROLLING && m_state != FPSTATE_IDENTIFYING && m_state != FPSTATE_VERIFYING)
++        return SYS_EBUSY;
++    return m_androidFP.uiVisible(visible);
++}
++
+ int FPDCommunity::Enroll(const QString &finger, const QDBusMessage &message)
+ {
+     const QString caller = message.service();
+diff --git a/src/fpdcommunity.h b/src/fpdcommunity.h
+index 19f3627..a05e0c1 100644
+--- a/src/fpdcommunity.h
++++ b/src/fpdcommunity.h
+@@ -99,6 +99,11 @@ public:
+     /* ========================================================================= *
+      * FINGERPRINT_DAEMON_DBUS_SERVICE (API Version 1)
+      * ========================================================================= */
++    Q_INVOKABLE QVariantMap GetSensorLocation();
++    Q_INVOKABLE int PointerDown(int x, int y);
++    Q_INVOKABLE int PointerUp();
++    Q_INVOKABLE int UiReady();
++    Q_INVOKABLE int SetUiVisible(bool visible);
+     Q_INVOKABLE int Enroll(const QString &finger, const QDBusMessage &message);
+     Q_INVOKABLE int Identify(const QDBusMessage &message);
+     Q_INVOKABLE QString GetState();
+diff --git a/src/hardware/android_hw_module.h b/src/hardware/android_hw_module.h
+index c6e13a2..87253a7 100644
+--- a/src/hardware/android_hw_module.h
++++ b/src/hardware/android_hw_module.h
+@@ -38,7 +38,7 @@ struct HIDDEN_SYMBOL ToHybris
+ {
+     static const char* path()
+     {
+-        static const char* cache = "libbiometry_fp_api.so";
++        static const char* cache = "/usr/lib/droidian-fpd/libbiometry_fp_aidl.so";
+         return cache;
+     }
+ 
+diff --git a/src/hardware/biometry_fp_api.cpp b/src/hardware/biometry_fp_api.cpp
+index ba15141..4627181 100644
+--- a/src/hardware/biometry_fp_api.cpp
++++ b/src/hardware/biometry_fp_api.cpp
+@@ -83,3 +83,14 @@ u_hardware_biometry_authenticate,
+ UHardwareBiometry,
+ uint64_t,
+ uint32_t)
++
++IMPLEMENT_FUNCTION2(UHardwareBiometryRequestStatus, u_hardware_biometry_sensorLocation,
++                    UHardwareBiometry, int32_t*)
++IMPLEMENT_FUNCTION3(UHardwareBiometryRequestStatus, u_hardware_biometry_pointerDown,
++                    UHardwareBiometry, int32_t, int32_t)
++IMPLEMENT_FUNCTION1(UHardwareBiometryRequestStatus, u_hardware_biometry_pointerUp,
++                    UHardwareBiometry)
++IMPLEMENT_FUNCTION1(UHardwareBiometryRequestStatus, u_hardware_biometry_uiReady,
++                    UHardwareBiometry)
++IMPLEMENT_FUNCTION2(UHardwareBiometryRequestStatus, u_hardware_biometry_uiVisible,
++                    UHardwareBiometry, int32_t)

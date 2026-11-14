@@ -1,0 +1,472 @@
+diff --git a/src/fingerprint-manager.c b/src/fingerprint-manager.c
+new file mode 100644
+index 0000000..25a28a0
+--- /dev/null
++++ b/src/fingerprint-manager.c
+@@ -0,0 +1,391 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++/* Native Phosh presentation for the existing Droidian fingerprint daemon. */
++#define G_LOG_DOMAIN "phosh-fingerprint-manager"
++
++#include "phosh-config.h"
++#include "fingerprint-manager.h"
++#include "layersurface-priv.h"
++#include "monitor/monitor.h"
++#include "phosh-wayland.h"
++#include "shell-priv.h"
++
++#include <gio/gio.h>
++#include <math.h>
++
++struct _PhoshFingerprintManager {
++  GObject parent;
++  GDBusProxy *proxy;
++  GCancellable *cancellable;
++  PhoshMonitor *monitor;
++  GtkWidget *surface;
++  GtkWidget *canvas;
++  GtkGesture *gesture;
++  gint sensor_x, sensor_y, sensor_radius;
++  double x, y, radius;
++  gboolean active;
++  gboolean pressed;
++  gboolean ready_pending;
++};
++
++G_DEFINE_TYPE (PhoshFingerprintManager, phosh_fingerprint_manager, G_TYPE_OBJECT)
++
++static void
++set_ui_visible (PhoshFingerprintManager *self, gboolean visible)
++{
++  g_dbus_proxy_call (self->proxy, "SetUiVisible", g_variant_new ("(b)", visible),
++                     G_DBUS_CALL_FLAGS_NO_AUTO_START, 1000, self->cancellable, NULL, NULL);
++}
++
++
++static void
++pointer_up (PhoshFingerprintManager *self)
++{
++  if (!self->pressed)
++    return;
++  self->pressed = FALSE;
++  self->ready_pending = FALSE;
++  g_dbus_proxy_call (self->proxy, "PointerUp", NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START,
++                     1000, self->cancellable, NULL, NULL);
++  if (self->canvas)
++    gtk_widget_queue_draw (self->canvas);
++}
++
++
++static void
++after_paint (GdkFrameClock *clock, PhoshFingerprintManager *self)
++{
++  if (!self->ready_pending || !self->pressed)
++    return;
++  self->ready_pending = FALSE;
++  g_dbus_proxy_call (self->proxy, "UiReady", NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START,
++                     1000, self->cancellable, NULL, NULL);
++}
++
++
++static void
++pointer_down_done (GObject *object, GAsyncResult *result, gpointer data)
++{
++  g_autoptr (PhoshFingerprintManager) self = data;
++  g_autoptr (GError) error = NULL;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (object), result, &error);
++  gint status = -1;
++
++  if (!self->pressed || !self->canvas)
++    return;
++  if (reply)
++    g_variant_get (reply, "(i)", &status);
++  if (status) {
++    pointer_up (self);
++    if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++      g_warning ("Fingerprint touch was rejected (%d): %s", status, error ? error->message : "HAL error");
++    return;
++  }
++  self->ready_pending = TRUE;
++  gtk_widget_queue_draw (self->canvas);
++}
++
++
++static void
++on_pressed (GtkGestureMultiPress *gesture, gint count, double x, double y,
++            PhoshFingerprintManager *self)
++{
++  double dx = x - self->x, dy = y - self->y;
++
++  if (!self->active || self->pressed || dx * dx + dy * dy > self->radius * self->radius)
++    return;
++  self->pressed = TRUE;
++  gtk_gesture_set_state (GTK_GESTURE (gesture), GTK_EVENT_SEQUENCE_CLAIMED);
++  g_dbus_proxy_call (self->proxy, "PointerDown",
++                     g_variant_new ("(ii)", self->sensor_x, self->sensor_y),
++                     G_DBUS_CALL_FLAGS_NO_AUTO_START, 1000, self->cancellable,
++                     pointer_down_done, g_object_ref (self));
++}
++
++
++static void
++on_released (GtkGestureMultiPress *gesture, gint count, double x, double y,
++             PhoshFingerprintManager *self)
++{
++  pointer_up (self);
++}
++
++
++static void
++on_cancel (GtkGesture *gesture, GdkEventSequence *sequence, PhoshFingerprintManager *self)
++{
++  pointer_up (self);
++}
++
++
++static gboolean
++on_draw (GtkWidget *canvas, cairo_t *cr, PhoshFingerprintManager *self)
++{
++  cairo_set_source_rgb (cr, 1, 1, 1);
++  cairo_arc (cr, self->x, self->y, self->radius, 0, 2 * G_PI);
++  cairo_fill (cr);
++  if (!self->pressed) {
++    cairo_set_source_rgb (cr, 0.08, 0.75, 0.65);
++    cairo_set_line_width (cr, 2);
++    cairo_arc (cr, self->x, self->y, self->radius + 3, 0, 2 * G_PI);
++    cairo_stroke (cr);
++  }
++  return FALSE;
++}
++
++
++static void
++update_geometry (PhoshFingerprintManager *self)
++{
++  PhoshMonitorMode *mode = phosh_monitor_get_current_mode (self->monitor);
++  double x, y, temporary;
++  guint transform;
++  cairo_rectangle_int_t input;
++  cairo_region_t *region;
++
++  if (!mode || !self->surface || mode->width <= 0 || mode->height <= 0)
++    return;
++  x = (double) self->sensor_x / mode->width;
++  y = (double) self->sensor_y / mode->height;
++  transform = phosh_monitor_get_transform (self->monitor);
++  if (transform >= PHOSH_MONITOR_TRANSFORM_FLIPPED)
++    x = 1 - x;
++  switch (transform % 4) {
++  case PHOSH_MONITOR_TRANSFORM_90:
++    temporary = x; x = 1 - y; y = temporary;
++    break;
++  case PHOSH_MONITOR_TRANSFORM_180:
++    x = 1 - x; y = 1 - y;
++    break;
++  case PHOSH_MONITOR_TRANSFORM_270:
++    temporary = x; x = y; y = 1 - temporary;
++    break;
++  default:
++    break;
++  }
++  self->radius = (double) self->sensor_radius / phosh_monitor_get_fractional_scale (self->monitor);
++  self->x = self->y = self->radius + 6;
++  phosh_layer_surface_set_size (PHOSH_LAYER_SURFACE (self->surface),
++                                ceil (2 * self->x), ceil (2 * self->y));
++  phosh_layer_surface_set_margins (PHOSH_LAYER_SURFACE (self->surface),
++      floor (y * self->monitor->logical.height - self->y), 0, 0,
++      floor (x * self->monitor->logical.width - self->x));
++  input.x = floor (self->x - self->radius);
++  input.y = floor (self->y - self->radius);
++  input.width = input.height = ceil (2 * self->radius);
++  region = cairo_region_create_rectangle (&input);
++  gtk_widget_input_shape_combine_region (self->surface, region);
++  cairo_region_destroy (region);
++}
++
++
++static void
++on_monitor_configured (PhoshFingerprintManager *self)
++{
++  if (!self->surface)
++    return;
++  pointer_up (self);
++  update_geometry (self);
++  gtk_widget_queue_draw (self->canvas);
++}
++
++
++static void
++hide_surface (PhoshFingerprintManager *self)
++{
++  pointer_up (self);
++  if (self->surface)
++    set_ui_visible (self, FALSE);
++  if (self->canvas) {
++    GdkFrameClock *clock = gtk_widget_get_frame_clock (self->canvas);
++    if (clock) g_signal_handlers_disconnect_by_data (clock, self);
++  }
++  if (self->monitor) g_signal_handlers_disconnect_by_data (self->monitor, self);
++  g_clear_object (&self->gesture);
++  g_clear_pointer (&self->surface, gtk_widget_destroy);
++  self->canvas = NULL;
++  g_clear_object (&self->monitor);
++}
++
++
++static void
++on_monitor_power (PhoshFingerprintManager *self)
++{
++  gboolean on = phosh_monitor_get_power_save_mode (self->monitor) == PHOSH_MONITOR_POWER_SAVE_MODE_ON;
++
++  if (!on)
++    pointer_up (self);
++  if (self->surface && gtk_widget_get_mapped (self->surface))
++    set_ui_visible (self, on && self->active);
++}
++
++
++static void
++on_surface_mapped (GtkWidget *surface, PhoshFingerprintManager *self)
++{
++  on_monitor_power (self);
++}
++
++
++static void
++sensor_location_done (GObject *object, GAsyncResult *result, gpointer data)
++{
++  g_autoptr (PhoshFingerprintManager) self = data;
++  g_autoptr (GError) error = NULL;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (object), result, &error);
++  g_autoptr (GVariant) location = NULL;
++  g_autoptr (GtkCssProvider) style = NULL;
++  PhoshWayland *wayland;
++  GdkFrameClock *clock;
++
++  if (!self->active || self->surface || !reply)
++    return;
++  location = g_variant_get_child_value (reply, 0);
++  if (!g_variant_lookup (location, "x", "i", &self->sensor_x) ||
++      !g_variant_lookup (location, "y", "i", &self->sensor_y) ||
++      !g_variant_lookup (location, "radius", "i", &self->sensor_radius) || self->sensor_radius <= 0)
++    return;
++  self->monitor = g_object_ref (phosh_shell_get_primary_monitor (phosh_shell_get_default ()));
++  if (!phosh_monitor_is_builtin (self->monitor)) {
++    g_clear_object (&self->monitor);
++    return;
++  }
++  wayland = phosh_wayland_get_default ();
++  self->surface = g_object_new (PHOSH_TYPE_LAYER_SURFACE,
++      "layer-shell", phosh_wayland_get_zwlr_layer_shell_v1 (wayland),
++      "wl-output", phosh_monitor_get_wl_output (self->monitor),
++      "anchor", ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT,
++      "layer", ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
++      "kbd-interactivity", FALSE, "exclusive-zone", -1, "namespace", "phosh fingerprint", NULL);
++  gtk_widget_set_name (self->surface, "phosh-fingerprint");
++  style = gtk_css_provider_new ();
++  gtk_css_provider_load_from_data (style, "#phosh-fingerprint { background: transparent; }", -1, NULL);
++  gtk_style_context_add_provider (gtk_widget_get_style_context (self->surface),
++                                   GTK_STYLE_PROVIDER (style), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
++  self->canvas = gtk_drawing_area_new ();
++  gtk_widget_add_events (self->canvas, GDK_TOUCH_MASK | GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK);
++  gtk_container_add (GTK_CONTAINER (self->surface), self->canvas);
++  g_signal_connect_object (self->surface, "map", G_CALLBACK (on_surface_mapped), self, 0);
++  g_signal_connect_object (self->canvas, "draw", G_CALLBACK (on_draw), self, 0);
++  self->gesture = gtk_gesture_multi_press_new (self->canvas);
++  g_signal_connect_object (self->gesture, "pressed", G_CALLBACK (on_pressed), self, 0);
++  g_signal_connect_object (self->gesture, "released", G_CALLBACK (on_released), self, 0);
++  g_signal_connect_object (self->gesture, "cancel", G_CALLBACK (on_cancel), self, 0);
++  g_signal_connect_object (self->monitor, "notify::power-mode", G_CALLBACK (on_monitor_power), self,
++                           G_CONNECT_SWAPPED);
++  g_signal_connect_object (self->monitor, "configured", G_CALLBACK (on_monitor_configured), self,
++                           G_CONNECT_SWAPPED);
++  update_geometry (self);
++  gtk_widget_show_all (self->surface);
++  clock = gtk_widget_get_frame_clock (self->canvas);
++  g_signal_connect_object (clock, "after-paint", G_CALLBACK (after_paint), self, 0);
++}
++
++
++static void
++set_state (PhoshFingerprintManager *self, const char *state)
++{
++  self->active = g_str_equal (state, "FPSTATE_ENROLLING") ||
++                 g_str_equal (state, "FPSTATE_IDENTIFYING") ||
++                 g_str_equal (state, "FPSTATE_VERIFYING");
++  if (!self->active) {
++    hide_surface (self);
++    return;
++  }
++  if (!self->surface)
++    g_dbus_proxy_call (self->proxy, "GetSensorLocation", NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START,
++                       1000, self->cancellable, sensor_location_done, g_object_ref (self));
++}
++
++
++static void
++on_signal (GDBusProxy *proxy, const char *sender, const char *signal,
++           GVariant *parameters, PhoshFingerprintManager *self)
++{
++  const char *state;
++
++  if (!g_str_equal (signal, "StateChanged"))
++    return;
++  g_variant_get (parameters, "(&s)", &state);
++  set_state (self, state);
++}
++
++
++static void
++state_done (GObject *object, GAsyncResult *result, gpointer data)
++{
++  g_autoptr (PhoshFingerprintManager) self = data;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (object), result, NULL);
++  const char *state;
++
++  if (!reply)
++    return;
++  g_variant_get (reply, "(&s)", &state);
++  set_state (self, state);
++}
++
++
++static void
++on_name_owner (PhoshFingerprintManager *self)
++{
++  g_autofree char *owner = g_dbus_proxy_get_name_owner (self->proxy);
++
++  if (!owner) {
++    set_state (self, "FPSTATE_IDLE");
++    return;
++  }
++  g_dbus_proxy_call (self->proxy, "GetState", NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START,
++                     1000, self->cancellable, state_done, g_object_ref (self));
++}
++
++
++static void
++proxy_done (GObject *object, GAsyncResult *result, gpointer data)
++{
++  g_autoptr (PhoshFingerprintManager) self = data;
++
++  self->proxy = g_dbus_proxy_new_for_bus_finish (result, NULL);
++  if (!self->proxy)
++    return;
++  g_signal_connect_object (self->proxy, "g-signal", G_CALLBACK (on_signal), self, 0);
++  g_signal_connect_object (self->proxy, "notify::g-name-owner", G_CALLBACK (on_name_owner), self,
++                           G_CONNECT_SWAPPED);
++  on_name_owner (self);
++}
++
++
++static void
++phosh_fingerprint_manager_dispose (GObject *object)
++{
++  PhoshFingerprintManager *self = PHOSH_FINGERPRINT_MANAGER (object);
++
++  hide_surface (self);
++  g_cancellable_cancel (self->cancellable);
++  g_clear_object (&self->proxy);
++  g_clear_object (&self->cancellable);
++  G_OBJECT_CLASS (phosh_fingerprint_manager_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_fingerprint_manager_class_init (PhoshFingerprintManagerClass *klass)
++{
++  G_OBJECT_CLASS (klass)->dispose = phosh_fingerprint_manager_dispose;
++}
++
++
++static void
++phosh_fingerprint_manager_init (PhoshFingerprintManager *self)
++{
++  self->cancellable = g_cancellable_new ();
++  g_dbus_proxy_new_for_bus (G_BUS_TYPE_SYSTEM,
++      G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START | G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES,
++      NULL, "org.droidian.fingerprint", "/org/droidian/fingerprint", "org.droidian.fingerprint",
++      self->cancellable, proxy_done, g_object_ref (self));
++}
++
++
++PhoshFingerprintManager *
++phosh_fingerprint_manager_new (void)
++{
++  return g_object_new (PHOSH_TYPE_FINGERPRINT_MANAGER, NULL);
++}
+diff --git a/src/fingerprint-manager.h b/src/fingerprint-manager.h
+new file mode 100644
+index 0000000..5c5e022
+--- /dev/null
++++ b/src/fingerprint-manager.h
+@@ -0,0 +1,13 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#pragma once
++
++#include <glib-object.h>
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_FINGERPRINT_MANAGER (phosh_fingerprint_manager_get_type ())
++G_DECLARE_FINAL_TYPE (PhoshFingerprintManager, phosh_fingerprint_manager, PHOSH, FINGERPRINT_MANAGER, GObject)
++
++PhoshFingerprintManager *phosh_fingerprint_manager_new (void);
++
++G_END_DECLS
+diff --git a/src/meson.build b/src/meson.build
+index 8873821..9a46ad2 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -152,6 +152,7 @@ phosh_tool_headers = files(
+   'fading-label.h',
+   'favorite-list-model.h',
+   'feedback-manager.h',
++  'fingerprint-manager.h',
+   'folder-info.h',
+   'gnome-shell-manager.h',
+   'gtk-mount-manager.h',
+@@ -399,6 +400,7 @@ phosh_sources = files(
+   'contrib/shell-network-agent.c',
+   'emergency-calls-manager.c',
+   'edge-navigation.c',
++  'fingerprint-manager.c',
+   'fader.c',
+   'fake-clock.c',
+   'feedbackinfo.c',
+diff --git a/src/shell.c b/src/shell.c
+index 0acd53c..04cc35b 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -44,6 +44,7 @@
+ #include "docked-manager.h"
+ #include "emergency-calls-manager.h"
+ #include "fader.h"
++#include "fingerprint-manager.h"
+ #include "feedbackinfo.h"
+ #include "feedback-manager.h"
+ #include "gnome-shell-manager.h"
+@@ -204,6 +205,7 @@ typedef struct {
+   PhoshBrightnessManager     *brightness_manager;
+   PhoshDebugControl          *debug_control;
+   PhoshEdgeNavigation        *edge_navigation;
++  PhoshFingerprintManager    *fingerprint_manager;
+ 
+   /* sensors */
+   PhoshSensorProxyManager    *sensor_proxy_manager;
+@@ -632,6 +634,7 @@ phosh_shell_dispose (GObject *object)
+   g_clear_object (&priv->builtin_monitor);
+   g_clear_object (&priv->primary_monitor);
+   g_clear_object (&priv->background_manager);
++  g_clear_object (&priv->fingerprint_manager);
+   g_clear_object (&priv->edge_navigation);
+   g_clear_object (&priv->keyboard_events);
+   g_clear_object (&priv->app_tracker);
+@@ -944,6 +947,7 @@ setup_idle_cb (PhoshShell *self)
+   priv->power_menu_manager = phosh_power_menu_manager_new ();
+   priv->cell_broadcast_manager = phosh_cell_broadcast_manager_new ();
+   priv->edge_navigation = phosh_edge_navigation_new ();
++  priv->fingerprint_manager = phosh_fingerprint_manager_new ();
+ 
+   setup_primary_monitor_signal_handlers (self);
+   /* Setup event hooks late so state changes in UI files don't trigger feedback */
