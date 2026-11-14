@@ -266,6 +266,71 @@ capture-path failure; camera support is not complete, and no algorithm or
 error reporting was disabled to conceal it. Cold-boot ordering of the new
 unit also remains to be verified on a future normal boot.
 
+### Native touch navigation and lock-screen status
+
+The pinned Phosh build now applies the phone home, backlight, edge navigation
+and lock-screen status patches in `patches/phosh/`. Build it with
+`tools/build-phosh.sh`; `tools/install-ui-packages.py` installs the matching
+shell, common files, plugins, mobile tweaks and libphosh package into an
+offline device image. The final UI package version is `+shennong12`.
+
+Adaptation 0.1.28 defaults to Inter 15 / Noto Sans CJK SC 15, Monospace 13 and
+native text scaling 1.15. These remain normal GNOME settings and can be
+changed later. GTK 3/4 user styles enlarge header/back-button touch targets
+to 48 px, retaining the selected theme. New users inherit the style import
+through `/etc/skel`; the one-time existing-user migration preserves other CSS.
+
+An inward swipe from either edge routes Back through Phosh's own current
+view: it folds quick settings, returns the launcher to Home, or cancels the
+lock-screen subpage while preserving authentication. System prompts receive
+Escape. In applications, the same gesture sends the standard Alt+Left
+shortcut through the compositor's virtual keyboard. It works in fullscreen
+applications too, but applications that do not implement Back still need
+application-level support; the gesture does not forcibly close them. Vertical
+scrolls and incomplete swipes are rejected. No root input service is added.
+The native `mobi.phosh.shell.navigation edge-back-enabled` setting controls it.
+
+The main lock page retains its date/time and prioritizes a cellular card:
+operator, radio technology, signal percentage, registration/roaming state,
+automatic/manual selection, the actual NetworkManager data-connection state,
+MCC/MNC, current cell ID, APN, IPv4 address and local cellular receive/transmit
+rates. A native asynchronous GIO client reads oFono's existing registration/context
+cache once on wake or connection changes, then follows property notifications.
+The selected modem path comes from Phosh's current backend, not a fixed card.
+The existing WWAN manager exposes its active NM connection without creating
+another network-management client. No modem number or card index is hardcoded. Addresses
+and data state come from that connection; rates use its actual IP interface,
+never USB or Wi-Fi counters. Connection activation does not claim that an
+Internet reachability probe succeeded.
+
+Four smaller color-coded tiles show CPU usage, the hottest named CPU sensor
+temperature, memory usage excluding reclaimable cache and battery percentage,
+with compact progress bars. Connected/enabled Wi-Fi has a supplementary line;
+its radio is never enabled just to populate the card. Radio, Wi-Fi and battery
+values come from existing Phosh managers and their change notifications, not
+extra scans, reconnects or background modem polling. No IMEI or SIM identifier
+is shown on the lock screen.
+
+CPU and memory counters are read from `/proc` and temperature from the
+CPU's thermal zones. An asynchronous two-second sample runs only while
+the lock card is mapped on an illuminated display; hiding it, unlocking or
+blanking the display removes the timer. The first CPU interval is shown as
+unknown until there are two samples. Missing readings are shown as unknown
+rather than zero. `sm.puri.phosh.lockscreen show-system-status` controls the
+card, independently of the existing lock-screen clock.
+
+On-device installation and screenshots confirmed all four tiles, the complete
+cellular card, actual registration/selection mode, MCC/MNC, cell ID, active APN
+and allocated IPv4 without cropping at the native display size. Live system
+readings and interface byte counters were also checked. The user confirmed
+the enlarged Settings font is acceptable.
+Both edge input paths were exercised through the real touchscreen event
+interface and committed native Back actions in the lock screen. A blank-screen
+check held the sample count at 27 for five seconds and resumed sampling after
+wake. Temporary debug domains were cleared afterward. Per-application Back
+handling still depends on each application; cold-boot first-wake, fingerprint
+AIDL support and the camera capture failure remain separate unresolved work.
+
 ### Vendor RPC dependencies and log audit
 
 ADSP being online does not mean the optional FastRPC transport is available.

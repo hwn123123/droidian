@@ -1,0 +1,1117 @@
+From: Ning <hwn123123@users.noreply.github.com>
+Subject: [PATCH] Add native cellular dashboard widgets and global Back gestures
+
+diff --git a/data/mobi.phosh.shell.gschema.xml b/data/mobi.phosh.shell.gschema.xml
+index fd7c791..5fd2e52 100644
+--- a/data/mobi.phosh.shell.gschema.xml
++++ b/data/mobi.phosh.shell.gschema.xml
+@@ -3,7 +3,7 @@
+     <key name="edge-back-enabled" type="b">
+       <default>true</default>
+       <summary>Return with a swipe inward from either screen edge</summary>
+-      <description>Send the standard desktop Back shortcut to the focused app. The gesture is inactive on the home screen, while locked, and during system prompts.</description>
++      <description>Return in shell menus and lock-screen subpages, or send the standard desktop Back shortcut to the focused app. Back never unlocks the session. Gestures are inactive while the display is off or in docked mode.</description>
+     </key>
+   </schema>
+   <schema id="mobi.phosh.shell.home" path="/mobi/phosh/shell/home/">
+@@ -192,6 +192,14 @@
+         or password by simply swiping up.
+       </description>
+     </key>
++    <key name="show-system-status" type="b">
++      <default>true</default>
++      <summary>Show system and network status on the lock screen</summary>
++      <description>
++        Show CPU usage, CPU temperature, memory usage and current cellular and
++        Wi-Fi state below the clock. Sampling stops while the screen is off.
++      </description>
++    </key>
+   </schema>
+ 
+   <enum id='mobi.phosh.shell.NotificationUrgency'>
+diff --git a/src/edge-navigation.c b/src/edge-navigation.c
+index 0d44693..5bfd59a 100644
+--- a/src/edge-navigation.c
++++ b/src/edge-navigation.c
+@@ -6,6 +6,7 @@
+ #include "monitor/monitor.h"
+ #include "phosh-wayland.h"
+ #include "shell-priv.h"
++#include "top-panel.h"
+ #include "util.h"
+ 
+ #include <math.h>
+@@ -43,12 +44,13 @@ G_DEFINE_TYPE (PhoshEdgeNavigation, phosh_edge_navigation, G_TYPE_OBJECT)
+  */
+ static const char keymap[] =
+   "xkb_keymap {"
+-  " xkb_keycodes \"navigation\" { minimum=8; maximum=255; <LALT>=64; <LEFT>=113; };"
++  " xkb_keycodes \"navigation\" { minimum=8; maximum=255; <LALT>=64; <LEFT>=113; <ESC>=9; };"
+   " xkb_types \"navigation\" { type \"ONE_LEVEL\" { modifiers=None; map[None]=Level1; }; };"
+   " xkb_compatibility \"navigation\" {};"
+   " xkb_symbols \"navigation\" {"
+   " key <LALT> { type=\"ONE_LEVEL\", [ Alt_L ] }; modifier_map Mod1 { <LALT> };"
+-  " key <LEFT> { type=\"ONE_LEVEL\", [ Left ] }; };"
++  " key <LEFT> { type=\"ONE_LEVEL\", [ Left ] };"
++  " key <ESC> { type=\"ONE_LEVEL\", [ Escape ] }; };"
+   "};";
+ 
+ static gboolean
+@@ -84,16 +86,25 @@ static void
+ send_back (PhoshEdgeNavigation *self)
+ {
+   guint32 now = g_get_monotonic_time () / 1000;
++  PhoshShell *shell = phosh_shell_get_default ();
++  gboolean prompt;
++  guint32 key;
+ 
+-  if (!self->enabled || phosh_shell_get_state (phosh_shell_get_default ()) != PHOSH_STATE_NONE)
++  if (!self->enabled)
++    return;
++  if (phosh_shell_handle_back (shell)) {
++    g_debug ("Committed one native shell Back gesture");
+     return;
++  }
+   if (!self->keyboard && !create_keyboard (self)) {
+     g_warning ("The compositor does not offer the native virtual keyboard interface");
+     return;
+   }
+-  zwp_virtual_keyboard_v1_modifiers (self->keyboard, 1 << 3, 0, 0, 0);
+-  zwp_virtual_keyboard_v1_key (self->keyboard, now, 105, WL_KEYBOARD_KEY_STATE_PRESSED);
+-  zwp_virtual_keyboard_v1_key (self->keyboard, now + 1, 105, WL_KEYBOARD_KEY_STATE_RELEASED);
++  prompt = !!(phosh_shell_get_state (shell) & PHOSH_STATE_MODAL_SYSTEM_PROMPT);
++  key = prompt ? 1 : 105;
++  zwp_virtual_keyboard_v1_modifiers (self->keyboard, prompt ? 0 : 1 << 3, 0, 0, 0);
++  zwp_virtual_keyboard_v1_key (self->keyboard, now, key, WL_KEYBOARD_KEY_STATE_PRESSED);
++  zwp_virtual_keyboard_v1_key (self->keyboard, now + 1, key, WL_KEYBOARD_KEY_STATE_RELEASED);
+   zwp_virtual_keyboard_v1_modifiers (self->keyboard, 0, 0, 0, 0);
+   g_debug ("Committed one edge Back gesture");
+ }
+@@ -190,7 +201,7 @@ update_enabled (PhoshEdgeNavigation *self)
+   PhoshShell *shell = phosh_shell_get_default ();
+ 
+   self->enabled = g_settings_get_boolean (self->settings, "edge-back-enabled") &&
+-    phosh_shell_get_state (shell) == PHOSH_STATE_NONE && !phosh_shell_get_docked (shell);
++    !phosh_shell_get_blanked (shell) && !phosh_shell_get_docked (shell);
+   for (guint i = 0; i < G_N_ELEMENTS (self->edges); i++) {
+     Edge *edge = &self->edges[i];
+     if (!edge->window)
+@@ -227,7 +238,7 @@ rebuild_edges (PhoshEdgeNavigation *self)
+       "namespace", "phosh edge navigation", NULL);
+     gtk_widget_set_name (edge->window, "phosh-edge-navigation");
+     phosh_layer_surface_set_size (PHOSH_LAYER_SURFACE (edge->window), SURFACE_WIDTH, 0);
+-    phosh_layer_surface_set_margins (PHOSH_LAYER_SURFACE (edge->window), 64, 0, 48, 0);
++    phosh_layer_surface_set_margins (PHOSH_LAYER_SURFACE (edge->window), PHOSH_TOP_BAR_HEIGHT, 0, 48, 0);
+     edge->drawing = gtk_drawing_area_new ();
+     gtk_widget_show (edge->drawing);
+     gtk_container_add (GTK_CONTAINER (edge->window), edge->drawing);
+diff --git a/src/lockscreen-priv.h b/src/lockscreen-priv.h
+index c6ce9da..7482e5a 100644
+--- a/src/lockscreen-priv.h
++++ b/src/lockscreen-priv.h
+@@ -15,5 +15,6 @@ G_BEGIN_DECLS
+ GtkWidget *phosh_lockscreen_new (GType lockscreen_type, gpointer layer_shell, gpointer wl_output,
+                                  PhoshCallsManager *calls_manager);
+ void       phosh_lockscreen_set_bg_image (PhoshLockscreen *self, PhoshBackgroundImage *image);
++void       phosh_lockscreen_handle_back (PhoshLockscreen *self);
+ 
+ G_END_DECLS
+diff --git a/src/lockscreen-status.c b/src/lockscreen-status.c
+new file mode 100644
+index 0000000..2b2e012
+--- /dev/null
++++ b/src/lockscreen-status.c
+@@ -0,0 +1,676 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#define G_LOG_DOMAIN "phosh-lockscreen-status"
++
++#include "phosh-config.h"
++#include "lockscreen-status.h"
++#include "shell-priv.h"
++#include "wwan/wwan-manager.h"
++#include "wwan/phosh-wwan-ofono.h"
++#include "wwan/phosh-wwan-mm.h"
++
++#include <stdio.h>
++#include <string.h>
++
++typedef struct {
++  guint64 total, idle;
++  double memory, temperature;
++  gboolean cpu_valid, memory_valid, temperature_valid, traffic_valid;
++  guint64 rx, tx;
++  gint64 time;
++} Sample;
++
++typedef struct {
++  GtkWidget *value, *bar;
++} Metric;
++
++struct _PhoshLockscreenStatus {
++  GtkBox parent;
++  Metric cpu, temperature, memory, battery_metric;
++  GtkWidget *carrier, *technology, *signal, *signal_bar, *registration, *wifi_label;
++  GtkWidget *download, *upload, *detail_values[4];
++  PhoshBatteryManager *battery;
++  NMActiveConnection *data_connection;
++  GDBusProxy *registration_proxy;
++  GVariant *registration_details;
++  GCancellable *cancel;
++  char *registration_path, *actual_apn;
++  gboolean registration_pending, properties_pending, contexts_pending;
++  char *data_iface;
++  guint64 previous_rx, previous_tx;
++  gint64 previous_time;
++  gboolean have_traffic;
++  PhoshWWan *wwan;
++  PhoshWifiManager *wifi;
++  GSettings *settings;
++  guint timer;
++  gboolean active, pending, have_previous;
++  guint64 previous_total, previous_idle;
++};
++
++G_DEFINE_TYPE (PhoshLockscreenStatus, phosh_lockscreen_status, GTK_TYPE_BOX)
++
++/* Only local kernel counters are sampled. No subprocesses, modem polling,
++ * connectivity probes, privileged access or wake locks are needed. */
++static void
++collect_sample (GTask *task, gpointer source, gpointer task_data, GCancellable *cancellable)
++{
++  Sample *sample = g_new0 (Sample, 1);
++  g_autofree char *stat = NULL, *meminfo = NULL;
++  g_autoptr (GDir) thermal = NULL;
++  guint64 user, nice, system, idle, wait, irq, softirq, steal;
++  guint64 mem_total = 0, available = 0;
++  gboolean have_available = FALSE;
++  const char *name;
++
++  if (g_file_get_contents ("/proc/stat", &stat, NULL, NULL) &&
++      sscanf (stat, "cpu %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT
++              " %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT
++              " %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT,
++              &user, &nice, &system, &idle, &wait, &irq, &softirq, &steal) == 8) {
++    sample->total = user + nice + system + idle + wait + irq + softirq + steal;
++    sample->idle = idle + wait;
++    sample->cpu_valid = TRUE;
++  }
++  if (g_file_get_contents ("/proc/meminfo", &meminfo, NULL, NULL)) {
++    g_auto (GStrv) lines = g_strsplit (meminfo, "\n", -1);
++    for (guint i = 0; lines[i]; i++) {
++      if (g_str_has_prefix (lines[i], "MemTotal:"))
++        mem_total = g_ascii_strtoull (lines[i] + strlen ("MemTotal:"), NULL, 10);
++      if (g_str_has_prefix (lines[i], "MemAvailable:")) {
++        available = g_ascii_strtoull (lines[i] + strlen ("MemAvailable:"), NULL, 10);
++        have_available = TRUE;
++      }
++    }
++    if (mem_total && have_available) {
++      sample->memory = 100.0 * (mem_total - MIN (mem_total, available)) / mem_total;
++      sample->memory_valid = TRUE;
++    }
++  }
++  thermal = g_dir_open ("/sys/class/thermal", 0, NULL);
++  while (thermal && (name = g_dir_read_name (thermal))) {
++    g_autofree char *type_path = NULL, *temp_path = NULL, *type = NULL, *temp = NULL;
++    char *end;
++    gint64 value;
++
++    if (!g_str_has_prefix (name, "thermal_zone"))
++      continue;
++    type_path = g_build_filename ("/sys/class/thermal", name, "type", NULL);
++    if (!g_file_get_contents (type_path, &type, NULL, NULL) || !g_str_has_prefix (type, "cpu"))
++      continue;
++    temp_path = g_build_filename ("/sys/class/thermal", name, "temp", NULL);
++    if (!g_file_get_contents (temp_path, &temp, NULL, NULL))
++      continue;
++    value = g_ascii_strtoll (temp, &end, 10);
++    if (end == temp || value < -20000 || value > 150000)
++      continue;
++    /* Report the hottest CPU sensor, never the battery or a dummy zone. */
++    if (!sample->temperature_valid || value / 1000.0 > sample->temperature)
++      sample->temperature = value / 1000.0;
++    sample->temperature_valid = TRUE;
++  }
++  if (task_data && *(char *) task_data) {
++    g_autofree char *rx_path = g_build_filename ("/sys/class/net", task_data, "statistics/rx_bytes", NULL);
++    g_autofree char *tx_path = g_build_filename ("/sys/class/net", task_data, "statistics/tx_bytes", NULL);
++    g_autofree char *rx = NULL, *tx = NULL;
++    if (g_file_get_contents (rx_path, &rx, NULL, NULL) &&
++        g_file_get_contents (tx_path, &tx, NULL, NULL)) {
++      sample->rx = g_ascii_strtoull (rx, NULL, 10);
++      sample->tx = g_ascii_strtoull (tx, NULL, 10);
++      sample->traffic_valid = TRUE;
++    }
++  }
++  sample->time = g_get_monotonic_time ();
++  g_task_return_pointer (task, sample, g_free);
++}
++
++static void
++set_metric (Metric *metric, const char *text, double value, gboolean known)
++{
++  gtk_label_set_text (GTK_LABEL (metric->value), text);
++  gtk_level_bar_set_value (GTK_LEVEL_BAR (metric->bar), known ? CLAMP (value / 100, 0, 1) : 0);
++  gtk_widget_set_opacity (metric->bar, known ? 1 : .25);
++}
++
++static char *
++format_rate (double bytes)
++{
++  if (bytes >= 1024 * 1024)
++    return g_strdup_printf ("%.1f MB/s", bytes / (1024 * 1024));
++  if (bytes >= 1024)
++    return g_strdup_printf ("%.1f KB/s", bytes / 1024);
++  return g_strdup_printf ("%.0f B/s", bytes);
++}
++
++static void
++sample_ready (GObject *source, GAsyncResult *result, gpointer unused)
++{
++  PhoshLockscreenStatus *self = PHOSH_LOCKSCREEN_STATUS (source);
++  g_autofree Sample *sample = g_task_propagate_pointer (G_TASK (result), NULL);
++  g_autofree char *cpu = NULL, *memory = NULL, *temperature = NULL;
++  double busy = 0;
++  gboolean cpu_known;
++
++  self->pending = FALSE;
++  if (!self->active || !sample)
++    return;
++  cpu_known = sample->cpu_valid && self->have_previous &&
++    sample->total > self->previous_total && sample->idle >= self->previous_idle;
++  if (cpu_known)
++    busy = CLAMP (100.0 * (1.0 - (double) (sample->idle - self->previous_idle) /
++                                      (sample->total - self->previous_total)), 0, 100);
++  cpu = cpu_known ? g_strdup_printf ("%.0f%%", busy) : g_strdup ("—");
++  self->previous_total = sample->total;
++  self->previous_idle = sample->idle;
++  self->have_previous = sample->cpu_valid;
++  memory = sample->memory_valid ? g_strdup_printf ("%.0f%%", sample->memory) : g_strdup ("—");
++  temperature = sample->temperature_valid ? g_strdup_printf ("%.0f°", sample->temperature) : g_strdup ("—");
++  set_metric (&self->cpu, cpu, busy, cpu_known);
++  set_metric (&self->memory, memory, sample->memory, sample->memory_valid);
++  set_metric (&self->temperature, temperature, sample->temperature, sample->temperature_valid);
++  if (!g_strcmp0 (g_task_get_task_data (G_TASK (result)), self->data_iface) && sample->traffic_valid) {
++    if (self->have_traffic && sample->time > self->previous_time &&
++        sample->rx >= self->previous_rx && sample->tx >= self->previous_tx) {
++      double seconds = (sample->time - self->previous_time) / 1000000.0;
++      g_autofree char *down = format_rate ((sample->rx - self->previous_rx) / seconds);
++      g_autofree char *up = format_rate ((sample->tx - self->previous_tx) / seconds);
++      gtk_label_set_text (GTK_LABEL (self->download), down);
++      gtk_label_set_text (GTK_LABEL (self->upload), up);
++    }
++    self->previous_rx = sample->rx;
++    self->previous_tx = sample->tx;
++    self->previous_time = sample->time;
++    self->have_traffic = TRUE;
++  }
++  g_debug ("CPU %s, temperature %.1f°C, memory %s", cpu, sample->temperature, memory);
++}
++
++static void
++update_battery (PhoshLockscreenStatus *self)
++{
++  gboolean present = FALSE;
++  guint percent = 0;
++  g_autofree char *text = NULL;
++
++  if (!self->active || !self->battery)
++    return;
++  g_object_get (self->battery, "present", &present, "percent", &percent, NULL);
++  text = present ? g_strdup_printf ("%u%%", percent) : g_strdup ("—");
++  set_metric (&self->battery_metric, text, percent, present);
++}
++
++static const char *
++registration_name (const char *status)
++{
++  if (!g_strcmp0 (status, "registered")) return "已注册";
++  if (!g_strcmp0 (status, "roaming")) return "漫游";
++  if (!g_strcmp0 (status, "searching")) return "搜索网络";
++  if (!g_strcmp0 (status, "denied")) return "注册被拒绝";
++  if (!g_strcmp0 (status, "unregistered")) return "未注册";
++  return "暂无注册信息";
++}
++
++static void update_network (PhoshLockscreenStatus *self);
++
++static void
++registration_ready (GObject *source, GAsyncResult *result, gpointer data)
++{
++  g_autoptr (PhoshLockscreenStatus) self = data;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (source), result, NULL);
++  if (G_DBUS_PROXY (source) != self->registration_proxy)
++    return;
++  self->properties_pending = FALSE;
++  g_clear_pointer (&self->registration_details, g_variant_unref);
++  if (reply)
++    self->registration_details = g_variant_get_child_value (reply, 0);
++  update_network (self);
++}
++
++static void
++contexts_ready (GObject *source, GAsyncResult *result, gpointer data)
++{
++  g_autoptr (PhoshLockscreenStatus) self = data;
++  g_autoptr (GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (source), result, NULL);
++  g_autoptr (GVariant) contexts = NULL;
++  if (G_DBUS_PROXY (source) != self->registration_proxy)
++    return;
++  self->contexts_pending = FALSE;
++  g_clear_pointer (&self->actual_apn, g_free);
++  if (reply) {
++    contexts = g_variant_get_child_value (reply, 0);
++    for (gsize i = 0; i < g_variant_n_children (contexts); i++) {
++      g_autoptr (GVariant) context = g_variant_get_child_value (contexts, i);
++      g_autoptr (GVariant) properties = g_variant_get_child_value (context, 1);
++      const char *type = NULL, *apn = NULL;
++      gboolean active = FALSE;
++      g_variant_lookup (properties, "Type", "&s", &type);
++      g_variant_lookup (properties, "Active", "b", &active);
++      if (active && !g_strcmp0 (type, "internet") &&
++          g_variant_lookup (properties, "AccessPointName", "&s", &apn)) {
++        self->actual_apn = g_strdup (apn);
++        break;
++      }
++    }
++  }
++  update_network (self);
++}
++
++static void
++refresh_registration (PhoshLockscreenStatus *self)
++{
++  if (!self->active || !self->registration_proxy)
++    return;
++  if (!self->properties_pending) {
++    self->properties_pending = TRUE;
++    g_dbus_proxy_call (self->registration_proxy, "GetProperties", NULL,
++      G_DBUS_CALL_FLAGS_NO_AUTO_START, 2000, self->cancel, registration_ready, g_object_ref (self));
++  }
++  if (!self->contexts_pending) {
++    self->contexts_pending = TRUE;
++    /* Fully qualified method reuses this proxy's bus/path with the original
++     * ConnectionManager interface. No connection is activated or changed. */
++    g_dbus_proxy_call (self->registration_proxy, "org.ofono.ConnectionManager.GetContexts", NULL,
++      G_DBUS_CALL_FLAGS_NO_AUTO_START, 2000, self->cancel, contexts_ready, g_object_ref (self));
++  }
++}
++
++static void
++registration_signal (GDBusProxy *proxy, const char *sender, const char *name,
++                      GVariant *parameters, PhoshLockscreenStatus *self)
++{
++  const char *key;
++  g_autoptr (GVariant) wrapped = NULL, value = NULL;
++  GVariantDict details;
++  if (!self->active || g_strcmp0 (name, "PropertyChanged"))
++    return;
++  g_variant_get (parameters, "(&s@v)", &key, &wrapped);
++  value = g_variant_get_variant (wrapped);
++  g_variant_dict_init (&details, self->registration_details);
++  g_variant_dict_insert_value (&details, key, value);
++  g_clear_pointer (&self->registration_details, g_variant_unref);
++  self->registration_details = g_variant_ref_sink (g_variant_dict_end (&details));
++  update_network (self);
++}
++
++typedef struct {
++  PhoshLockscreenStatus *self;
++  char *path;
++} RegistrationRequest;
++
++static void
++registration_proxy_ready (GObject *source, GAsyncResult *result, gpointer data)
++{
++  RegistrationRequest *request = data;
++  g_autoptr (PhoshLockscreenStatus) self = request->self;
++  g_autoptr (GDBusProxy) proxy = g_dbus_proxy_new_for_bus_finish (result, NULL);
++  gboolean current = !g_strcmp0 (request->path, self->registration_path);
++  g_free (request->path);
++  g_free (request);
++  if (!current)
++    return;
++  self->registration_pending = FALSE;
++  if (!proxy)
++    return;
++  g_set_object (&self->registration_proxy, proxy);
++  g_signal_connect_object (proxy, "g-signal", G_CALLBACK (registration_signal), self, 0);
++  g_signal_connect_object (proxy, "notify::g-name-owner", G_CALLBACK (refresh_registration), self, G_CONNECT_SWAPPED);
++  refresh_registration (self);
++}
++
++static void
++ensure_registration (PhoshLockscreenStatus *self, const char *path)
++{
++  RegistrationRequest *request;
++  if (!path || !g_variant_is_object_path (path))
++    path = NULL;
++  if (!g_strcmp0 (path, self->registration_path))
++    return;
++  g_free (self->registration_path);
++  self->registration_path = g_strdup (path);
++  if (self->registration_proxy)
++    g_signal_handlers_disconnect_by_data (self->registration_proxy, self);
++  g_clear_object (&self->registration_proxy);
++  g_clear_pointer (&self->registration_details, g_variant_unref);
++  g_clear_pointer (&self->actual_apn, g_free);
++  self->registration_pending = FALSE;
++  self->properties_pending = self->contexts_pending = FALSE;
++  if (!path)
++    return;
++  request = g_new0 (RegistrationRequest, 1);
++  request->self = g_object_ref (self);
++  request->path = g_strdup (path);
++  self->registration_pending = TRUE;
++  g_dbus_proxy_new_for_bus (G_BUS_TYPE_SYSTEM,
++    G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START | G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES,
++    NULL, "org.ofono", path, "org.ofono.NetworkRegistration", self->cancel,
++    registration_proxy_ready, request);
++}
++
++static void
++update_network (PhoshLockscreenStatus *self)
++{
++  const char *operator, *technology, *ssid, *iface = NULL, *address = NULL, *apn = NULL;
++  const char *status = NULL, *mode = NULL, *mcc = NULL, *mnc = NULL;
++  const char *data_status = "数据未连接";
++  g_autoptr (GVariant) details = NULL;
++  g_autofree char *registration = NULL, *signal = NULL, *wifi = NULL, *plmn = NULL, *cell = NULL;
++  NMActiveConnection *connection;
++  NMActiveConnectionState state = NM_ACTIVE_CONNECTION_STATE_UNKNOWN;
++  guint quality, cellid = 0;
++  gboolean have_cell = FALSE, radio_ready;
++
++  if (!self->active || !self->wwan || !self->wifi)
++    return;
++  operator = phosh_wwan_get_operator (self->wwan);
++  technology = phosh_wwan_get_access_tec (self->wwan);
++  quality = MIN (100, phosh_wwan_get_signal_quality (self->wwan));
++  radio_ready = phosh_wwan_is_present (self->wwan) && phosh_wwan_is_enabled (self->wwan) &&
++                phosh_wwan_has_sim (self->wwan);
++  const char *modem_path = PHOSH_IS_WWAN_MM (self->wwan) ?
++    phosh_wwan_mm_get_modem_device (PHOSH_WWAN_MM (self->wwan)) :
++    PHOSH_IS_WWAN_OFONO (self->wwan) ? phosh_wwan_ofono_get_modem_path (PHOSH_WWAN_OFONO (self->wwan)) : NULL;
++  ensure_registration (self, modem_path);
++  if (self->registration_details)
++    details = g_variant_ref (self->registration_details);
++  if (details) {
++    g_variant_lookup (details, "Status", "&s", &status);
++    g_variant_lookup (details, "Mode", "&s", &mode);
++    g_variant_lookup (details, "MobileCountryCode", "&s", &mcc);
++    g_variant_lookup (details, "MobileNetworkCode", "&s", &mnc);
++    have_cell = g_variant_lookup (details, "CellId", "u", &cellid);
++  }
++  connection = phosh_wwan_manager_get_active_connection (PHOSH_WWAN_MANAGER (self->wwan));
++  if (self->data_connection != connection) {
++    refresh_registration (self);
++    if (self->data_connection)
++      g_signal_handlers_disconnect_by_data (self->data_connection, self);
++    g_set_object (&self->data_connection, connection);
++    if (connection)
++      g_signal_connect_object (connection, "notify", G_CALLBACK (update_network), self, G_CONNECT_SWAPPED);
++  }
++  if (connection) {
++    const GPtrArray *devices = nm_active_connection_get_devices (connection);
++    NMRemoteConnection *config = nm_active_connection_get_connection (connection);
++    NMIPConfig *ip = nm_active_connection_get_ip4_config (connection);
++    state = nm_active_connection_get_state (connection);
++    if (config) {
++      NMSettingGsm *gsm = nm_connection_get_setting_gsm (NM_CONNECTION (config));
++      if (gsm) apn = nm_setting_gsm_get_apn (gsm);
++    }
++    if (state == NM_ACTIVE_CONNECTION_STATE_ACTIVATED) {
++      data_status = "数据已连接";
++      if (devices && devices->len)
++        iface = nm_device_get_ip_iface (g_ptr_array_index ((GPtrArray *) devices, 0));
++      if (ip) {
++        const GPtrArray *addresses = nm_ip_config_get_addresses (ip);
++        if (addresses && addresses->len)
++          address = nm_ip_address_get_address (g_ptr_array_index ((GPtrArray *) addresses, 0));
++      }
++    } else if (state == NM_ACTIVE_CONNECTION_STATE_ACTIVATING)
++      data_status = "数据连接中";
++    else if (state == NM_ACTIVE_CONNECTION_STATE_DEACTIVATING)
++      data_status = "正在断开数据";
++  }
++  if (g_strcmp0 (iface, self->data_iface)) {
++    g_free (self->data_iface);
++    self->data_iface = g_strdup (iface);
++    self->have_traffic = FALSE;
++    gtk_label_set_text (GTK_LABEL (self->download), "—");
++    gtk_label_set_text (GTK_LABEL (self->upload), "—");
++  }
++  if (!radio_ready) {
++    operator = !phosh_wwan_has_sim (self->wwan) ? "未插入 SIM 卡" : "蜂窝网络已关闭";
++    quality = 0;
++    technology = NULL;
++    mcc = mnc = NULL;
++    have_cell = FALSE;
++    status = "unregistered";
++  }
++  gtk_label_set_text (GTK_LABEL (self->carrier), operator && *operator ? operator : "未注册网络");
++  gtk_label_set_text (GTK_LABEL (self->technology), technology && *technology ? technology : "—");
++  signal = radio_ready ? g_strdup_printf ("信号 %u%%", quality) : g_strdup ("信号暂无数据");
++  gtk_label_set_text (GTK_LABEL (self->signal), signal);
++  gtk_level_bar_set_value (GTK_LEVEL_BAR (self->signal_bar), quality / 100.0);
++  registration = g_strdup_printf ("%s  ·  %s  ·  %s", registration_name (status),
++    !g_strcmp0 (mode, "auto") ? "自动选网" : !g_strcmp0 (mode, "manual") ? "手动选网" : "选网方式未知",
++    data_status);
++  gtk_label_set_text (GTK_LABEL (self->registration), registration);
++  plmn = mcc && mnc ? g_strconcat (mcc, " / ", mnc, NULL) : g_strdup ("暂无数据");
++  cell = have_cell ? g_strdup_printf ("%u", cellid) : g_strdup ("暂无数据");
++  gtk_label_set_text (GTK_LABEL (self->detail_values[0]), plmn);
++  gtk_label_set_text (GTK_LABEL (self->detail_values[1]), cell);
++  if ((!apn || !*apn) && self->actual_apn) apn = self->actual_apn;
++  gtk_label_set_text (GTK_LABEL (self->detail_values[2]), apn && *apn ? apn : "暂无数据");
++  gtk_label_set_text (GTK_LABEL (self->detail_values[3]), address ? address : "未分配");
++  gtk_widget_set_tooltip_text (self->detail_values[3], address);
++  ssid = phosh_wifi_manager_get_ssid (self->wifi);
++  if (phosh_wifi_manager_get_state (self->wifi) == NM_ACTIVE_CONNECTION_STATE_ACTIVATED && ssid && *ssid)
++    wifi = g_strdup_printf ("Wi-Fi  %s  ·  %u%%", ssid, phosh_wifi_manager_get_strength (self->wifi));
++  else
++    wifi = g_strdup ("Wi-Fi 未连接");
++  gtk_label_set_text (GTK_LABEL (self->wifi_label), wifi);
++  gtk_widget_set_visible (self->wifi_label, phosh_wifi_manager_get_enabled (self->wifi));
++}
++
++static gboolean
++request_sample (PhoshLockscreenStatus *self)
++{
++  g_autoptr (GTask) task = NULL;
++
++  if (!self->active)
++    return G_SOURCE_REMOVE;
++  if (self->pending)
++    return G_SOURCE_CONTINUE;
++  update_network (self);
++  update_battery (self);
++  self->pending = TRUE;
++  task = g_task_new (self, NULL, sample_ready, NULL);
++  g_task_set_task_data (task, g_strdup (self->data_iface), g_free);
++  g_task_run_in_thread (task, collect_sample);
++  return G_SOURCE_CONTINUE;
++}
++
++static void
++update_active (PhoshLockscreenStatus *self)
++{
++  PhoshShell *shell = phosh_shell_get_default ();
++  gboolean active = gtk_widget_get_mapped (GTK_WIDGET (self)) &&
++    phosh_shell_get_locked (shell) && !phosh_shell_get_blanked (shell);
++
++  if (active == self->active)
++    return;
++  self->active = active;
++  self->have_previous = FALSE;
++  self->have_traffic = FALSE;
++  g_debug ("Lock status sampling %s", active ? "started" : "stopped");
++  g_clear_handle_id (&self->timer, g_source_remove);
++  if (!active)
++    return;
++  set_metric (&self->cpu, "—", 0, FALSE);
++  gtk_label_set_text (GTK_LABEL (self->download), "—");
++  gtk_label_set_text (GTK_LABEL (self->upload), "—");
++  update_network (self);
++  refresh_registration (self);
++  request_sample (self);
++  self->timer = g_timeout_add_seconds (2, G_SOURCE_FUNC (request_sample), self);
++  g_source_set_name_by_id (self->timer, "[phosh] visible lockscreen status");
++}
++
++static void
++phosh_lockscreen_status_map (GtkWidget *widget)
++{
++  GTK_WIDGET_CLASS (phosh_lockscreen_status_parent_class)->map (widget);
++  update_active (PHOSH_LOCKSCREEN_STATUS (widget));
++}
++
++static void
++phosh_lockscreen_status_unmap (GtkWidget *widget)
++{
++  GTK_WIDGET_CLASS (phosh_lockscreen_status_parent_class)->unmap (widget);
++  update_active (PHOSH_LOCKSCREEN_STATUS (widget));
++}
++
++static void
++phosh_lockscreen_status_dispose (GObject *object)
++{
++  PhoshLockscreenStatus *self = PHOSH_LOCKSCREEN_STATUS (object);
++  self->active = FALSE;
++  g_clear_handle_id (&self->timer, g_source_remove);
++  g_clear_object (&self->settings);
++  if (self->cancel) g_cancellable_cancel (self->cancel);
++  g_clear_object (&self->cancel);
++  g_clear_object (&self->data_connection);
++  g_clear_object (&self->registration_proxy);
++  g_clear_pointer (&self->registration_details, g_variant_unref);
++  g_clear_pointer (&self->registration_path, g_free);
++  g_clear_pointer (&self->actual_apn, g_free);
++  g_clear_pointer (&self->data_iface, g_free);
++  G_OBJECT_CLASS (phosh_lockscreen_status_parent_class)->dispose (object);
++}
++
++static void
++phosh_lockscreen_status_class_init (PhoshLockscreenStatusClass *klass)
++{
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++  G_OBJECT_CLASS (klass)->dispose = phosh_lockscreen_status_dispose;
++  widget_class->map = phosh_lockscreen_status_map;
++  widget_class->unmap = phosh_lockscreen_status_unmap;
++  gtk_widget_class_set_css_name (widget_class, "phosh-lockscreen-status");
++}
++
++static void
++connect_network (PhoshLockscreenStatus *self)
++{
++  PhoshShell *shell = phosh_shell_get_default ();
++
++  /* The lock screen is constructed before startup creates the Wi-Fi manager. */
++  self->wwan = phosh_shell_get_wwan (shell);
++  self->wifi = phosh_shell_get_wifi_manager (shell);
++  self->battery = phosh_shell_get_battery_manager (shell);
++  g_signal_connect_object (self->battery, "notify", G_CALLBACK (update_battery), self, G_CONNECT_SWAPPED);
++  update_battery (self);
++  g_signal_connect_object (self->wwan, "notify", G_CALLBACK (update_network), self,
++                           G_CONNECT_SWAPPED);
++  g_signal_connect_object (self->wifi, "notify", G_CALLBACK (update_network), self,
++                           G_CONNECT_SWAPPED);
++  update_network (self);
++}
++
++static GtkWidget *
++label (const char *text, const char *css)
++{
++  GtkWidget *widget = gtk_label_new (text);
++  gtk_label_set_xalign (GTK_LABEL (widget), 0);
++  gtk_style_context_add_class (gtk_widget_get_style_context (widget), css);
++  return widget;
++}
++
++static void
++style (GtkWidget *widget, const char *css)
++{
++  gtk_style_context_add_class (gtk_widget_get_style_context (widget), css);
++}
++
++static GtkWidget *
++make_metric (Metric *metric, const char *title, const char *css)
++{
++  GtkWidget *box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 9);
++  style (box, "status-tile");
++  style (box, css);
++  gtk_widget_set_hexpand (box, TRUE);
++  gtk_box_pack_start (GTK_BOX (box), label (title, "status-caption"), FALSE, FALSE, 0);
++  metric->value = label ("—", "status-number");
++  gtk_box_pack_start (GTK_BOX (box), metric->value, FALSE, FALSE, 0);
++  metric->bar = gtk_level_bar_new_for_interval (0, 1);
++  gtk_box_pack_start (GTK_BOX (box), metric->bar, FALSE, FALSE, 0);
++  return box;
++}
++
++static void
++phosh_lockscreen_status_init (PhoshLockscreenStatus *self)
++{
++  PhoshShell *shell = phosh_shell_get_default ();
++  GtkWidget *network, *header, *title, *icon, *strength, *speeds, *details, *metrics;
++  const char *captions[] = {"网络代码 MCC / MNC", "当前小区", "接入点 APN", "IPv4 地址"};
++  GtkWidget *box, *value;
++
++  self->cancel = g_cancellable_new ();
++  gtk_orientable_set_orientation (GTK_ORIENTABLE (self), GTK_ORIENTATION_VERTICAL);
++  gtk_box_set_spacing (GTK_BOX (self), 12);
++  gtk_widget_set_margin_top (GTK_WIDGET (self), 20);
++  gtk_widget_set_margin_start (GTK_WIDGET (self), 20);
++  gtk_widget_set_margin_end (GTK_WIDGET (self), 20);
++  network = gtk_box_new (GTK_ORIENTATION_VERTICAL, 14);
++  style (network, "network-card");
++  gtk_box_pack_start (GTK_BOX (self), network, FALSE, FALSE, 0);
++  header = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
++  icon = gtk_image_new_from_icon_name ("network-cellular-symbolic", GTK_ICON_SIZE_LARGE_TOOLBAR);
++  gtk_image_set_pixel_size (GTK_IMAGE (icon), 24);
++  style (icon, "network-badge");
++  gtk_box_pack_start (GTK_BOX (header), icon, FALSE, FALSE, 0);
++  title = gtk_box_new (GTK_ORIENTATION_VERTICAL, 4);
++  gtk_box_pack_start (GTK_BOX (title), label ("蜂窝网络", "status-caption"), FALSE, FALSE, 0);
++  self->carrier = label ("读取网络…", "network-carrier");
++  gtk_label_set_ellipsize (GTK_LABEL (self->carrier), PANGO_ELLIPSIZE_END);
++  gtk_box_pack_start (GTK_BOX (title), self->carrier, FALSE, FALSE, 0);
++  gtk_box_pack_start (GTK_BOX (header), title, TRUE, TRUE, 0);
++  self->technology = label ("—", "network-technology");
++  gtk_widget_set_valign (self->technology, GTK_ALIGN_CENTER);
++  gtk_box_pack_end (GTK_BOX (header), self->technology, FALSE, FALSE, 0);
++  gtk_box_pack_start (GTK_BOX (network), header, FALSE, FALSE, 0);
++  strength = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
++  self->signal_bar = gtk_level_bar_new_for_interval (0, 1);
++  style (self->signal_bar, "network-strength");
++  gtk_widget_set_valign (self->signal_bar, GTK_ALIGN_CENTER);
++  gtk_box_pack_start (GTK_BOX (strength), self->signal_bar, TRUE, TRUE, 0);
++  self->signal = label ("信号暂无数据", "network-signal");
++  gtk_box_pack_start (GTK_BOX (strength), self->signal, FALSE, FALSE, 0);
++  gtk_box_pack_start (GTK_BOX (network), strength, FALSE, FALSE, 0);
++  self->registration = label ("正在读取连接状态", "network-registration");
++  gtk_label_set_line_wrap (GTK_LABEL (self->registration), TRUE);
++  gtk_box_pack_start (GTK_BOX (network), self->registration, FALSE, FALSE, 0);
++  speeds = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 16);
++  gtk_box_set_homogeneous (GTK_BOX (speeds), TRUE);
++  style (speeds, "network-speed-row");
++  for (guint i = 0; i < 2; i++) {
++    box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 5);
++    gtk_box_pack_start (GTK_BOX (box), label (i ? "↑  实时上传" : "↓  实时下载", "status-caption"), FALSE, FALSE, 0);
++    value = label ("—", "network-speed");
++    if (i) self->upload = value; else self->download = value;
++    gtk_box_pack_start (GTK_BOX (box), value, FALSE, FALSE, 0);
++    gtk_box_pack_start (GTK_BOX (speeds), box, TRUE, TRUE, 0);
++  }
++  gtk_box_pack_start (GTK_BOX (network), speeds, FALSE, FALSE, 0);
++  details = gtk_grid_new ();
++  gtk_grid_set_column_homogeneous (GTK_GRID (details), TRUE);
++  gtk_grid_set_column_spacing (GTK_GRID (details), 14);
++  gtk_grid_set_row_spacing (GTK_GRID (details), 14);
++  for (guint i = 0; i < G_N_ELEMENTS (captions); i++) {
++    box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 5);
++    gtk_box_pack_start (GTK_BOX (box), label (captions[i], "status-caption"), FALSE, FALSE, 0);
++    self->detail_values[i] = label ("暂无数据", "network-detail");
++    gtk_label_set_ellipsize (GTK_LABEL (self->detail_values[i]), PANGO_ELLIPSIZE_END);
++    gtk_label_set_width_chars (GTK_LABEL (self->detail_values[i]), 1);
++    gtk_box_pack_start (GTK_BOX (box), self->detail_values[i], FALSE, FALSE, 0);
++    gtk_grid_attach (GTK_GRID (details), box, i % 2, i / 2, 1, 1);
++  }
++  gtk_box_pack_start (GTK_BOX (network), details, FALSE, FALSE, 0);
++  self->wifi_label = label ("Wi-Fi 未连接", "network-registration");
++  gtk_box_pack_start (GTK_BOX (network), self->wifi_label, FALSE, FALSE, 0);
++  metrics = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
++  gtk_box_set_homogeneous (GTK_BOX (metrics), TRUE);
++  gtk_box_pack_start (GTK_BOX (metrics), make_metric (&self->cpu, "CPU", "cpu-tile"), TRUE, TRUE, 0);
++  gtk_box_pack_start (GTK_BOX (metrics), make_metric (&self->temperature, "温度", "temperature-tile"), TRUE, TRUE, 0);
++  gtk_box_pack_start (GTK_BOX (metrics), make_metric (&self->memory, "内存", "memory-tile"), TRUE, TRUE, 0);
++  gtk_box_pack_start (GTK_BOX (metrics), make_metric (&self->battery_metric, "电量", "battery-tile"), TRUE, TRUE, 0);
++  gtk_box_pack_start (GTK_BOX (self), metrics, FALSE, FALSE, 0);
++  gtk_widget_show_all (network);
++  gtk_widget_show_all (metrics);
++  if (phosh_shell_is_startup_finished (shell))
++    connect_network (self);
++  else
++    g_signal_connect_object (shell, "ready", G_CALLBACK (connect_network), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (shell, "notify::shell-state", G_CALLBACK (update_active), self,
++                           G_CONNECT_SWAPPED);
++  self->settings = g_settings_new ("sm.puri.phosh.lockscreen");
++  g_settings_bind (self->settings, "show-system-status", self, "visible", G_SETTINGS_BIND_GET);
++}
+diff --git a/src/lockscreen-status.h b/src/lockscreen-status.h
+new file mode 100644
+index 0000000..dca9ddd
+--- /dev/null
++++ b/src/lockscreen-status.h
+@@ -0,0 +1,12 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#pragma once
++
++#include <gtk/gtk.h>
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_LOCKSCREEN_STATUS (phosh_lockscreen_status_get_type ())
++G_DECLARE_FINAL_TYPE (PhoshLockscreenStatus, phosh_lockscreen_status,
++                      PHOSH, LOCKSCREEN_STATUS, GtkBox)
++
++G_END_DECLS
+diff --git a/src/lockscreen.c b/src/lockscreen.c
+index fe91212..5737c52 100644
+--- a/src/lockscreen.c
++++ b/src/lockscreen.c
+@@ -16,6 +16,7 @@
+ #include "layersurface-priv.h"
+ #include "lockscreen-bg.h"
+ #include "lockscreen-priv.h"
++#include "lockscreen-status.h"
+ #include "notifications/notify-manager.h"
+ #include "notifications/notification-frame.h"
+ #include "osk-manager.h"
+@@ -479,6 +480,17 @@ submit_cb (PhoshLockscreen *self)
+ }
+ 
+ 
++void
++phosh_lockscreen_handle_back (PhoshLockscreen *self)
++{
++  PhoshLockscreenPrivate *priv = phosh_lockscreen_get_instance_private (self);
++
++  clear_input (self, TRUE);
++  hdy_deck_set_visible_child (priv->deck, priv->box_info);
++  phosh_lockscreen_set_page (self, PHOSH_LOCKSCREEN_PAGE_INFO);
++}
++
++
+ static gboolean
+ key_press_event_cb (PhoshLockscreen *self, GdkEventKey *event, gpointer data)
+ {
+@@ -1139,6 +1151,7 @@ phosh_lockscreen_class_init (PhoshLockscreenClass *klass)
+ 
+   g_type_ensure (PHOSH_TYPE_KEYPAD);
+   g_type_ensure (PHOSH_TYPE_WIDGET_BOX);
++  g_type_ensure (PHOSH_TYPE_LOCKSCREEN_STATUS);
+   gtk_widget_class_set_css_name (widget_class, "phosh-lockscreen");
+   gtk_widget_class_set_template_from_resource (widget_class,
+                                                "/mobi/phosh/ui/lockscreen.ui");
+diff --git a/src/meson.build b/src/meson.build
+index 67641b1..8873821 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -262,7 +262,6 @@ phosh_tool_sources = files(
+   'phosh-wayland.c',
+   'plugin-loader.c',
+   'power-menu-manager.c',
+-  'edge-navigation.c',
+   'power-menu.c',
+   'quick-setting.c',
+   'quick-settings-box.c',
+@@ -399,6 +398,7 @@ phosh_sources = files(
+   'bt-status-page.c',
+   'contrib/shell-network-agent.c',
+   'emergency-calls-manager.c',
++  'edge-navigation.c',
+   'fader.c',
+   'fake-clock.c',
+   'feedbackinfo.c',
+@@ -411,6 +411,7 @@ phosh_sources = files(
+   'lockscreen-bg.c',
+   'lockscreen-manager.c',
+   'lockscreen.c',
++  'lockscreen-status.c',
+   'monitor-manager.c',
+   'network-auth-manager.c',
+   'network-auth-prompt.c',
+diff --git a/src/shell-priv.h b/src/shell-priv.h
+index b62282f..773cb10 100644
+--- a/src/shell-priv.h
++++ b/src/shell-priv.h
+@@ -127,6 +127,7 @@ void                 phosh_shell_set_state (PhoshShell *self, PhoshShellStateFla
+ gboolean             phosh_shell_get_show_splash (PhoshShell *self);
+ gboolean             phosh_shell_get_docked      (PhoshShell *self);
+ gboolean             phosh_shell_get_blanked     (PhoshShell *self);
++gboolean             phosh_shell_handle_back     (PhoshShell *self);
+ gboolean             phosh_shell_activate_action (PhoshShell *self,
+                                                   const char *action,
+                                                   GVariant   *parameter);
+diff --git a/src/shell.c b/src/shell.c
+index 524c7c6..0acd53c 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -58,6 +58,7 @@
+ #include "layout-manager.h"
+ #include "location-manager.h"
+ #include "lockscreen-manager-priv.h"
++#include "lockscreen-priv.h"
+ #include "default-media-player.h"
+ #include "mode-manager.h"
+ #include "monitor-manager.h"
+@@ -736,6 +737,37 @@ on_pb_long_press (PhoshShell *self)
+ }
+ 
+ 
++/* Handle Back in shell-owned views before delivering a shortcut to an app.
++ * Returning from the lock keypad never unlocks or activates an application. */
++gboolean
++phosh_shell_handle_back (PhoshShell *self)
++{
++  PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
++  PhoshShellStateFlags state = phosh_shell_get_state (self);
++
++  if (state & PHOSH_STATE_BLANKED)
++    return TRUE;
++  /* Native prompts receive Escape via their own focused key handler. */
++  if (state & PHOSH_STATE_MODAL_SYSTEM_PROMPT)
++    return FALSE;
++  if (state & PHOSH_STATE_SETTINGS) {
++    phosh_top_panel_fold (PHOSH_TOP_PANEL (priv->top_panel));
++    return TRUE;
++  }
++  if (state & PHOSH_STATE_LOCKED) {
++    PhoshLockscreen *lockscreen = phosh_lockscreen_manager_get_lockscreen (priv->lockscreen_manager);
++    if (lockscreen)
++      phosh_lockscreen_handle_back (lockscreen);
++    return TRUE;
++  }
++  if (state & PHOSH_STATE_OVERVIEW) {
++    phosh_overview_reset (phosh_home_get_overview (PHOSH_HOME (priv->home)));
++    return TRUE;
++  }
++  return FALSE;
++}
++
++
+ static void
+ on_notification_activated (PhoshShell *self)
+ {
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index 1ccd3bf..df5a68a 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -1372,3 +1372,57 @@ phosh-app-grid-button.home-drop-target {
+ .phone-navigation button:hover { background: rgba(255,255,255,.10); }
+ 
+ #phosh-edge-navigation { background: transparent; box-shadow: none; border: none; }
++
++phosh-lockscreen-status {
++  padding: 0;
++  background: transparent;
++  color: #f4f8fc;
++  font-size: 16px;
++  text-shadow: none;
++}
++phosh-lockscreen-status .network-card,
++phosh-lockscreen-status .status-tile {
++  border: 1px solid rgba(205,228,255,.13);
++  background: linear-gradient(135deg, rgba(23,42,62,.94), rgba(9,24,41,.94));
++  box-shadow: 0 8px 22px rgba(0,0,0,.18);
++  border-radius: 22px;
++}
++phosh-lockscreen-status .network-card { padding: 20px; }
++phosh-lockscreen-status .status-tile { border-radius: 17px; padding: 14px 12px; }
++phosh-lockscreen-status .status-caption { font-size: 13px; color: #a6b8cc; }
++phosh-lockscreen-status .network-carrier { font-size: 25px; font-weight: 600; }
++phosh-lockscreen-status .network-badge {
++  background: rgba(66,213,188,.14); color: #59ddc5;
++  border-radius: 14px; padding: 12px;
++}
++phosh-lockscreen-status .network-technology {
++  font-size: 18px; font-weight: 700; color: #72edd6;
++  background: rgba(66,213,188,.13); border: 1px solid rgba(89,221,197,.25);
++  border-radius: 12px; padding: 8px 12px;
++}
++phosh-lockscreen-status .network-registration { font-size: 14px; color: #bbc9d9; }
++phosh-lockscreen-status .network-signal { font-size: 15px; color: #72edd6; }
++phosh-lockscreen-status .network-speed-row {
++  border-top: 1px solid rgba(205,228,255,.10);
++  border-bottom: 1px solid rgba(205,228,255,.10);
++  padding: 14px 0;
++}
++phosh-lockscreen-status .network-speed { font-size: 22px; font-weight: 600; font-feature-settings: "tnum"; }
++phosh-lockscreen-status .network-detail { font-size: 17px; font-feature-settings: "tnum"; }
++phosh-lockscreen-status .status-number { font-size: 25px; font-weight: 600; font-feature-settings: "tnum"; }
++phosh-lockscreen-status levelbar trough {
++  min-width: 0; min-height: 4px; border: none; border-radius: 4px; padding: 0;
++  background: rgba(185,208,230,.13); outline: none;
++}
++phosh-lockscreen-status levelbar block { min-width: 0; min-height: 4px; border-radius: 4px; padding: 0; border: none; }
++phosh-lockscreen-status .network-strength block.filled { background: #4bd6bc; }
++phosh-lockscreen-status .cpu-tile block.filled { background: #6ab8ff; }
++phosh-lockscreen-status .temperature-tile block.filled { background: #ffbc7c; }
++phosh-lockscreen-status .memory-tile block.filled { background: #4bd6bc; }
++phosh-lockscreen-status .battery-tile block.filled { background: #bca5ff; }
++phosh-lockscreen-status .cpu-tile .status-number { color: #93caff; }
++phosh-lockscreen-status .temperature-tile .status-number { color: #ffd1a7; }
++phosh-lockscreen-status .memory-tile .status-number { color: #83e5d3; }
++phosh-lockscreen-status .battery-tile .status-number { color: #d3c4ff; }
++
++phosh-lockscreen-status levelbar block.empty { background: rgba(185,208,230,.13); }
+diff --git a/src/ui/lockscreen.ui b/src/ui/lockscreen.ui
+index cd4ac56..cbdded5 100644
+--- a/src/ui/lockscreen.ui
++++ b/src/ui/lockscreen.ui
+@@ -132,6 +132,9 @@
+                         <property name="valign">center</property>
+                       </object>
+                     </child>
++                    <child>
++                      <object class="PhoshLockscreenStatus"/>
++                    </child>
+                     <child>
+                       <object class="GtkScrolledWindow" id="sw_notifications">
+                         <property name="visible">1</property>
+diff --git a/src/wwan/phosh-wwan-mm.c b/src/wwan/phosh-wwan-mm.c
+index 7ea25bb..b57ddc2 100644
+--- a/src/wwan/phosh-wwan-mm.c
++++ b/src/wwan/phosh-wwan-mm.c
+@@ -852,3 +852,11 @@ phosh_wwan_mm_new (void)
+ {
+   return g_object_new (PHOSH_TYPE_WWAN_MM, NULL);
+ }
++
++/* ofono2mm publishes the selected oFono path in the standard Device field. */
++const char *
++phosh_wwan_mm_get_modem_device (PhoshWWanMM *self)
++{
++  g_return_val_if_fail (PHOSH_IS_WWAN_MM (self), NULL);
++  return self->modem ? mm_modem_get_device (self->modem) : NULL;
++}
+diff --git a/src/wwan/phosh-wwan-mm.h b/src/wwan/phosh-wwan-mm.h
+index b24be2a..708fc69 100644
+--- a/src/wwan/phosh-wwan-mm.h
++++ b/src/wwan/phosh-wwan-mm.h
+@@ -17,4 +17,6 @@ G_DECLARE_FINAL_TYPE (PhoshWWanMM, phosh_wwan_mm, PHOSH, WWAN_MM, PhoshWWanManag
+ 
+ PhoshWWanMM * phosh_wwan_mm_new                (void);
+ 
++const char *phosh_wwan_mm_get_modem_device (PhoshWWanMM *self);
++
+ G_END_DECLS
+diff --git a/src/wwan/phosh-wwan-ofono.c b/src/wwan/phosh-wwan-ofono.c
+index b25bd31..66602cd 100644
+--- a/src/wwan/phosh-wwan-ofono.c
++++ b/src/wwan/phosh-wwan-ofono.c
+@@ -731,3 +731,11 @@ phosh_wwan_ofono_new (void)
+ {
+   return g_object_new (PHOSH_TYPE_WWAN_OFONO, NULL);
+ }
++
++/* Read the selected modem path without choosing or changing a SIM. */
++const char *
++phosh_wwan_ofono_get_modem_path (PhoshWWanOfono *self)
++{
++  g_return_val_if_fail (PHOSH_IS_WWAN_OFONO (self), NULL);
++  return self->object_path;
++}
+diff --git a/src/wwan/phosh-wwan-ofono.h b/src/wwan/phosh-wwan-ofono.h
+index b2e46c6..cdbf2c7 100644
+--- a/src/wwan/phosh-wwan-ofono.h
++++ b/src/wwan/phosh-wwan-ofono.h
+@@ -17,4 +17,6 @@ G_DECLARE_FINAL_TYPE (PhoshWWanOfono, phosh_wwan_ofono, PHOSH, WWAN_OFONO, Phosh
+ 
+ PhoshWWanOfono *phosh_wwan_ofono_new (void);
+ 
++const char *phosh_wwan_ofono_get_modem_path (PhoshWWanOfono *self);
++
+ G_END_DECLS
+diff --git a/src/wwan/wwan-manager.c b/src/wwan/wwan-manager.c
+index bd8a961..f6ece57 100644
+--- a/src/wwan/wwan-manager.c
++++ b/src/wwan/wwan-manager.c
+@@ -488,6 +488,17 @@ phosh_wwan_manager_set_enabled (PhoshWWanManager *self, gboolean enabled)
+  *
+  * Returns: `TRUE` if a mobile data connection is enabled otherwise `FALSE`.
+  */
++/* Read-only view of the existing connection; no extra NM client or reconnect. */
++NMActiveConnection *
++phosh_wwan_manager_get_active_connection (PhoshWWanManager *self)
++{
++  PhoshWWanManagerPrivate *priv;
++
++  g_return_val_if_fail (PHOSH_IS_WWAN_MANAGER (self), NULL);
++  priv = phosh_wwan_manager_get_instance_private (self);
++  return priv->active;
++}
++
+ gboolean
+ phosh_wwan_manager_get_data_enabled (PhoshWWanManager *self)
+ {
+diff --git a/src/wwan/wwan-manager.h b/src/wwan/wwan-manager.h
+index 774698b..db2577f 100644
+--- a/src/wwan/wwan-manager.h
++++ b/src/wwan/wwan-manager.h
+@@ -7,6 +7,7 @@
+ #pragma once
+ 
+ #include <glib-object.h>
++#include <NetworkManager.h>
+ 
+ G_BEGIN_DECLS
+ 
+@@ -23,5 +24,6 @@ void               phosh_wwan_manager_set_enabled (PhoshWWanManager *self, gbool
+ gboolean           phosh_wwan_manager_get_data_enabled (PhoshWWanManager *self);
+ void               phosh_wwan_manager_set_data_enabled (PhoshWWanManager *self, gboolean enabled);
+ gboolean           phosh_wwan_manager_has_data (PhoshWWanManager *self);
++NMActiveConnection *phosh_wwan_manager_get_active_connection (PhoshWWanManager *self);
+ 
+ G_END_DECLS

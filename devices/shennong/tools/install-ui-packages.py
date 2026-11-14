@@ -33,9 +33,10 @@ for package in lock['packages']:
         raise SystemExit(f'Appearance package checksum mismatch: {path}')
     archives.append(path)
 
-version = '0.55.0+git20260824233009.bee1861.next.phosh.0.55+shennong6'
+version = '0.55.0+git20260824233009.bee1861.next.phosh.0.55+shennong12'
 output = repo / 'out/shennong/ui-packages'
 for name, architecture in [('phosh', 'arm64'), ('phosh-common', 'all'),
+                           ('libphosh-0.45-0', 'arm64'),
                            ('phosh-plugins', 'arm64'), ('phosh-mobile-tweaks', 'all')]:
     path = output / f'{name}_{version}_{architecture}.deb'
     if not path.is_file():

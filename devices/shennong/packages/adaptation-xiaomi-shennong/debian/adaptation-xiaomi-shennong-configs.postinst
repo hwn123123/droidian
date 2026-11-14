@@ -11,5 +11,21 @@ if [ "$1" = configure ]; then
     rm -f /usr/lib/droidian/device/mtp-supported /usr/libexec/shennong-mtp
     chmod 600 /etc/NetworkManager/system-connections/shennong-usb-sharing.nmconnection
     chmod 600 /etc/NetworkManager/system-connections/shennong-mobile-auto.nmconnection
+    # One-time GTK user-style migration. Keep existing CSS and allow the user
+    # to remove this import later; subsequent package upgrades do not restore it.
+    if dpkg --compare-versions "${2:-0}" lt 0.1.27; then
+        desktop_dir=$(getent passwd droidian | cut -d: -f6)
+        if [ -n "$desktop_dir" ] && [ -d "$desktop_dir" ]; then
+            for api in 3 4; do
+                style_dir="$desktop_dir/.config/gtk-$api.0"
+                import="@import url(\"/usr/share/droidian/shennong/gtk$api-touch.css\");"
+                install -d -m755 -o droidian -g droidian "$style_dir"
+                if ! grep -Fqx "$import" "$style_dir/gtk.css" 2>/dev/null; then
+                    printf '\n%s\n' "$import" >> "$style_dir/gtk.css"
+                    chown droidian:droidian "$style_dir/gtk.css"
+                fi
+            done
+        fi
+    fi
 fi
 #DEBHELPER#

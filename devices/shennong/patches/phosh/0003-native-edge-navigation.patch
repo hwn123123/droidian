@@ -1,0 +1,402 @@
+From: Ning <hwn123123@users.noreply.github.com>
+Subject: [PATCH] Add native edge Back navigation and touch-size controls
+
+Use the existing shell lifecycle, layer surfaces, GSettings and Wayland virtual
+keyboard. Keep lockscreen and system-prompt touch paths outside the gesture.
+
+diff --git a/data/mobi.phosh.shell.gschema.xml b/data/mobi.phosh.shell.gschema.xml
+index 4410c5a..fd7c791 100644
+--- a/data/mobi.phosh.shell.gschema.xml
++++ b/data/mobi.phosh.shell.gschema.xml
+@@ -1,4 +1,11 @@
+ <schemalist>
++  <schema id="mobi.phosh.shell.navigation" path="/mobi/phosh/shell/navigation/">
++    <key name="edge-back-enabled" type="b">
++      <default>true</default>
++      <summary>Return with a swipe inward from either screen edge</summary>
++      <description>Send the standard desktop Back shortcut to the focused app. The gesture is inactive on the home screen, while locked, and during system prompts.</description>
++    </key>
++  </schema>
+   <schema id="mobi.phosh.shell.home" path="/mobi/phosh/shell/home/">
+     <key name="app-order" type="as">
+       <default>[]</default>
+diff --git a/src/edge-navigation.c b/src/edge-navigation.c
+new file mode 100644
+index 0000000..0d44693
+--- /dev/null
++++ b/src/edge-navigation.c
+@@ -0,0 +1,286 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#define G_LOG_DOMAIN "phosh-edge-navigation"
++#include "phosh-config.h"
++#include "edge-navigation.h"
++#include "layersurface-priv.h"
++#include "monitor/monitor.h"
++#include "phosh-wayland.h"
++#include "shell-priv.h"
++#include "util.h"
++
++#include <math.h>
++#include <string.h>
++#include <sys/mman.h>
++#include <unistd.h>
++
++#define EDGE_WIDTH 16
++#define SURFACE_WIDTH 64
++#define COMMIT_DISTANCE 48.0
++
++typedef struct {
++  PhoshEdgeNavigation *owner;
++  GtkWidget *window;
++  GtkWidget *drawing;
++  GtkGesture *drag;
++  gboolean right;
++  gboolean tracking;
++  double distance;
++  double origin_y;
++} Edge;
++
++struct _PhoshEdgeNavigation {
++  GObject parent;
++  GSettings *settings;
++  struct zwp_virtual_keyboard_v1 *keyboard;
++  Edge edges[2];
++  gboolean enabled;
++};
++
++G_DEFINE_TYPE (PhoshEdgeNavigation, phosh_edge_navigation, G_TYPE_OBJECT)
++
++/* A complete keymap for the standard desktop Back shortcut (Alt+Left).
++ * The virtual keyboard never grabs focus or requires root/input injection.
++ */
++static const char keymap[] =
++  "xkb_keymap {"
++  " xkb_keycodes \"navigation\" { minimum=8; maximum=255; <LALT>=64; <LEFT>=113; };"
++  " xkb_types \"navigation\" { type \"ONE_LEVEL\" { modifiers=None; map[None]=Level1; }; };"
++  " xkb_compatibility \"navigation\" {};"
++  " xkb_symbols \"navigation\" {"
++  " key <LALT> { type=\"ONE_LEVEL\", [ Alt_L ] }; modifier_map Mod1 { <LALT> };"
++  " key <LEFT> { type=\"ONE_LEVEL\", [ Left ] }; };"
++  "};";
++
++static gboolean
++create_keyboard (PhoshEdgeNavigation *self)
++{
++  PhoshWayland *wl = phosh_wayland_get_default ();
++  struct zwp_virtual_keyboard_manager_v1 *manager;
++  void *map;
++  int fd;
++
++  manager = phosh_wayland_get_zwp_virtual_keyboard_manager_v1 (wl);
++  if (!manager || !phosh_wayland_get_wl_seat (wl))
++    return FALSE;
++  fd = phosh_create_shm_file (sizeof keymap);
++  if (fd < 0)
++    return FALSE;
++  map = mmap (NULL, sizeof keymap, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++  if (map == MAP_FAILED) {
++    close (fd);
++    return FALSE;
++  }
++  memcpy (map, keymap, sizeof keymap);
++  munmap (map, sizeof keymap);
++  self->keyboard = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard (
++    manager, phosh_wayland_get_wl_seat (wl));
++  zwp_virtual_keyboard_v1_keymap (self->keyboard, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
++                                fd, sizeof keymap);
++  close (fd);
++  return TRUE;
++}
++
++static void
++send_back (PhoshEdgeNavigation *self)
++{
++  guint32 now = g_get_monotonic_time () / 1000;
++
++  if (!self->enabled || phosh_shell_get_state (phosh_shell_get_default ()) != PHOSH_STATE_NONE)
++    return;
++  if (!self->keyboard && !create_keyboard (self)) {
++    g_warning ("The compositor does not offer the native virtual keyboard interface");
++    return;
++  }
++  zwp_virtual_keyboard_v1_modifiers (self->keyboard, 1 << 3, 0, 0, 0);
++  zwp_virtual_keyboard_v1_key (self->keyboard, now, 105, WL_KEYBOARD_KEY_STATE_PRESSED);
++  zwp_virtual_keyboard_v1_key (self->keyboard, now + 1, 105, WL_KEYBOARD_KEY_STATE_RELEASED);
++  zwp_virtual_keyboard_v1_modifiers (self->keyboard, 0, 0, 0, 0);
++  g_debug ("Committed one edge Back gesture");
++}
++
++static gboolean
++draw_edge (GtkWidget *widget, cairo_t *cr, Edge *edge)
++{
++  double progress = CLAMP (edge->distance / COMMIT_DISTANCE, 0, 1);
++  double x = edge->right ? SURFACE_WIDTH - 24 : 24;
++  double y = CLAMP (edge->origin_y, 32, MAX (32, gtk_widget_get_allocated_height (widget) - 32));
++
++  if (!edge->tracking || progress == 0)
++    return FALSE;
++  cairo_set_source_rgba (cr, .05, .08, .12, .8 * progress);
++  cairo_arc (cr, x, y, 23 * progress, 0, 2 * G_PI);
++  cairo_fill (cr);
++  cairo_set_source_rgba (cr, 1, 1, 1, progress);
++  cairo_set_line_width (cr, 3.5);
++  cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
++  cairo_set_line_join (cr, CAIRO_LINE_JOIN_ROUND);
++  cairo_move_to (cr, x + 5, y - 10);
++  cairo_line_to (cr, x - 5, y);
++  cairo_line_to (cr, x + 5, y + 10);
++  cairo_stroke (cr);
++  return FALSE;
++}
++
++static void
++drag_begin (GtkGestureDrag *gesture, double x, double y, Edge *edge)
++{
++  edge->tracking = edge->owner->enabled;
++  edge->distance = 0;
++  edge->origin_y = y;
++}
++
++static void
++drag_update (GtkGestureDrag *gesture, double dx, double dy, Edge *edge)
++{
++  if (!edge->tracking)
++    return;
++  edge->distance = edge->right ? -dx : dx;
++  if (fabs (dy) > 24 && fabs (dy) > MAX (0, edge->distance)) {
++    edge->tracking = FALSE;
++    gtk_gesture_set_state (GTK_GESTURE (gesture), GTK_EVENT_SEQUENCE_DENIED);
++  }
++  gtk_widget_queue_draw (edge->drawing);
++}
++
++static void
++drag_end (GtkGestureDrag *gesture, double dx, double dy, Edge *edge)
++{
++  double distance = edge->right ? -dx : dx;
++  gboolean commit = edge->tracking && distance >= COMMIT_DISTANCE && fabs (dy) < distance * .6;
++
++  edge->tracking = FALSE;
++  edge->distance = 0;
++  gtk_widget_queue_draw (edge->drawing);
++  if (commit)
++    send_back (edge->owner);
++}
++
++static void
++drag_cancel (GtkGesture *gesture, GdkEventSequence *sequence, Edge *edge)
++{
++  edge->tracking = FALSE;
++  edge->distance = 0;
++  gtk_widget_queue_draw (edge->drawing);
++}
++
++static void
++set_input_region (GtkWidget *widget, Edge *edge)
++{
++  cairo_rectangle_int_t rect = {
++    .x = edge->right ? gtk_widget_get_allocated_width (widget) - EDGE_WIDTH : 0,
++    .y = 0,
++    .width = EDGE_WIDTH,
++    .height = gtk_widget_get_allocated_height (widget),
++  };
++  cairo_region_t *region = cairo_region_create_rectangle (&rect);
++
++  gtk_widget_input_shape_combine_region (widget, region);
++  cairo_region_destroy (region);
++}
++
++static void
++on_size_allocate (GtkWidget *widget, GtkAllocation *allocation, Edge *edge)
++{
++  set_input_region (widget, edge);
++}
++
++static void
++update_enabled (PhoshEdgeNavigation *self)
++{
++  PhoshShell *shell = phosh_shell_get_default ();
++
++  self->enabled = g_settings_get_boolean (self->settings, "edge-back-enabled") &&
++    phosh_shell_get_state (shell) == PHOSH_STATE_NONE && !phosh_shell_get_docked (shell);
++  for (guint i = 0; i < G_N_ELEMENTS (self->edges); i++) {
++    Edge *edge = &self->edges[i];
++    if (!edge->window)
++      continue;
++    edge->tracking = FALSE;
++    gtk_widget_set_visible (edge->window, self->enabled);
++  }
++}
++
++static void
++rebuild_edges (PhoshEdgeNavigation *self)
++{
++  PhoshWayland *wl = phosh_wayland_get_default ();
++  PhoshMonitor *monitor = phosh_shell_get_primary_monitor (phosh_shell_get_default ());
++
++  for (guint i = 0; i < G_N_ELEMENTS (self->edges); i++) {
++    Edge *edge = &self->edges[i];
++    g_clear_object (&edge->drag);
++    g_clear_pointer (&edge->window, gtk_widget_destroy);
++    edge->drawing = NULL;
++    edge->tracking = FALSE;
++    if (!monitor)
++      continue;
++    edge->owner = self;
++    edge->right = i == 1;
++    edge->window = g_object_new (PHOSH_TYPE_LAYER_SURFACE,
++      "layer-shell", phosh_wayland_get_zwlr_layer_shell_v1 (wl),
++      "wl-output", phosh_monitor_get_wl_output (monitor),
++      "anchor", ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
++        (edge->right ? ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT : ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT),
++      "layer", ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
++      "kbd-interactivity", FALSE,
++      "exclusive-zone", -1,
++      "namespace", "phosh edge navigation", NULL);
++    gtk_widget_set_name (edge->window, "phosh-edge-navigation");
++    phosh_layer_surface_set_size (PHOSH_LAYER_SURFACE (edge->window), SURFACE_WIDTH, 0);
++    phosh_layer_surface_set_margins (PHOSH_LAYER_SURFACE (edge->window), 64, 0, 48, 0);
++    edge->drawing = gtk_drawing_area_new ();
++    gtk_widget_show (edge->drawing);
++    gtk_container_add (GTK_CONTAINER (edge->window), edge->drawing);
++    edge->drag = gtk_gesture_drag_new (edge->window);
++    gtk_gesture_single_set_touch_only (GTK_GESTURE_SINGLE (edge->drag), TRUE);
++    gtk_event_controller_set_propagation_phase (GTK_EVENT_CONTROLLER (edge->drag), GTK_PHASE_CAPTURE);
++    g_signal_connect (edge->drag, "drag-begin", G_CALLBACK (drag_begin), edge);
++    g_signal_connect (edge->drag, "drag-update", G_CALLBACK (drag_update), edge);
++    g_signal_connect (edge->drag, "drag-end", G_CALLBACK (drag_end), edge);
++    g_signal_connect (edge->drag, "cancel", G_CALLBACK (drag_cancel), edge);
++    g_signal_connect (edge->drawing, "draw", G_CALLBACK (draw_edge), edge);
++    g_signal_connect (edge->window, "size-allocate", G_CALLBACK (on_size_allocate), edge);
++  }
++  update_enabled (self);
++}
++
++static void
++phosh_edge_navigation_dispose (GObject *object)
++{
++  PhoshEdgeNavigation *self = PHOSH_EDGE_NAVIGATION (object);
++  for (guint i = 0; i < G_N_ELEMENTS (self->edges); i++) {
++    g_clear_object (&self->edges[i].drag);
++    g_clear_pointer (&self->edges[i].window, gtk_widget_destroy);
++  }
++  g_clear_pointer (&self->keyboard, zwp_virtual_keyboard_v1_destroy);
++  g_clear_object (&self->settings);
++  G_OBJECT_CLASS (phosh_edge_navigation_parent_class)->dispose (object);
++}
++
++static void
++phosh_edge_navigation_class_init (PhoshEdgeNavigationClass *klass)
++{
++  G_OBJECT_CLASS (klass)->dispose = phosh_edge_navigation_dispose;
++}
++
++static void
++phosh_edge_navigation_init (PhoshEdgeNavigation *self)
++{
++  PhoshShell *shell = phosh_shell_get_default ();
++  self->settings = g_settings_new ("mobi.phosh.shell.navigation");
++  g_signal_connect_object (self->settings, "changed::edge-back-enabled",
++                          G_CALLBACK (update_enabled), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (shell, "notify::shell-state",
++                          G_CALLBACK (update_enabled), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (shell, "notify::docked",
++                          G_CALLBACK (update_enabled), self, G_CONNECT_SWAPPED);
++  g_signal_connect_object (shell, "notify::primary-monitor",
++                          G_CALLBACK (rebuild_edges), self, G_CONNECT_SWAPPED);
++  rebuild_edges (self);
++}
++
++PhoshEdgeNavigation *
++phosh_edge_navigation_new (void)
++{
++  return g_object_new (PHOSH_TYPE_EDGE_NAVIGATION, NULL);
++}
+diff --git a/src/edge-navigation.h b/src/edge-navigation.h
+new file mode 100644
+index 0000000..744ec47
+--- /dev/null
++++ b/src/edge-navigation.h
+@@ -0,0 +1,10 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#pragma once
++
++#include <glib-object.h>
++
++G_BEGIN_DECLS
++#define PHOSH_TYPE_EDGE_NAVIGATION (phosh_edge_navigation_get_type ())
++G_DECLARE_FINAL_TYPE (PhoshEdgeNavigation, phosh_edge_navigation, PHOSH, EDGE_NAVIGATION, GObject)
++PhoshEdgeNavigation *phosh_edge_navigation_new (void);
++G_END_DECLS
+diff --git a/src/meson.build b/src/meson.build
+index de5e148..67641b1 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -262,6 +262,7 @@ phosh_tool_sources = files(
+   'phosh-wayland.c',
+   'plugin-loader.c',
+   'power-menu-manager.c',
++  'edge-navigation.c',
+   'power-menu.c',
+   'quick-setting.c',
+   'quick-settings-box.c',
+diff --git a/src/shell.c b/src/shell.c
+index 2987a0c..524c7c6 100644
+--- a/src/shell.c
++++ b/src/shell.c
+@@ -106,6 +106,7 @@
+ #include "wall-clock.h"
+ 
+ #include "phosh-settings-enums.h"
++#include "edge-navigation.h"
+ 
+ #define WWAN_BACKEND_KEY "wwan-backend"
+ #define OSD_HIDE_TIMEOUT 1 /* seconds */
+@@ -201,6 +202,7 @@ typedef struct {
+   PhoshMprisManager          *mpris_manager;
+   PhoshBrightnessManager     *brightness_manager;
+   PhoshDebugControl          *debug_control;
++  PhoshEdgeNavigation        *edge_navigation;
+ 
+   /* sensors */
+   PhoshSensorProxyManager    *sensor_proxy_manager;
+@@ -629,6 +631,7 @@ phosh_shell_dispose (GObject *object)
+   g_clear_object (&priv->builtin_monitor);
+   g_clear_object (&priv->primary_monitor);
+   g_clear_object (&priv->background_manager);
++  g_clear_object (&priv->edge_navigation);
+   g_clear_object (&priv->keyboard_events);
+   g_clear_object (&priv->app_tracker);
+   g_clear_object (&priv->suspend_manager);
+@@ -908,6 +911,7 @@ setup_idle_cb (PhoshShell *self)
+   priv->emergency_calls_manager = phosh_emergency_calls_manager_new ();
+   priv->power_menu_manager = phosh_power_menu_manager_new ();
+   priv->cell_broadcast_manager = phosh_cell_broadcast_manager_new ();
++  priv->edge_navigation = phosh_edge_navigation_new ();
+ 
+   setup_primary_monitor_signal_handlers (self);
+   /* Setup event hooks late so state changes in UI files don't trigger feedback */
+diff --git a/src/stylesheet/common.css b/src/stylesheet/common.css
+index 4a7b17a..1ccd3bf 100644
+--- a/src/stylesheet/common.css
++++ b/src/stylesheet/common.css
+@@ -111,7 +111,7 @@ phosh-quick-setting {
+   border-radius: 99px;
+   border: 0;
+   font-weight: bold;
+-  font-size: 10pt;
++  font-size: 12pt;
+   background-color: @phosh_button_bg_color;
+ }
+ 
+@@ -1366,7 +1366,9 @@ phosh-app-grid-button.home-drop-target {
+ .phone-navigation { padding: 2px 0; }
+ .phone-navigation button {
+   border: none; box-shadow: none; background: transparent;
+-  min-height: 30px; min-width: 44px; padding: 0 8px;
++  min-height: 44px; min-width: 52px; padding: 0 8px;
+   color: rgba(255,255,255,.86);
+ }
+ .phone-navigation button:hover { background: rgba(255,255,255,.10); }
++
++#phosh-edge-navigation { background: transparent; box-shadow: none; border: none; }
