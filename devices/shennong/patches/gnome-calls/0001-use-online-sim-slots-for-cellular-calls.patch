@@ -1,0 +1,562 @@
+diff --git a/plugins/provider/ofono/calls-ofono-origin.c b/plugins/provider/ofono/calls-ofono-origin.c
+index 504155c..033d651 100644
+--- a/plugins/provider/ofono/calls-ofono-origin.c
++++ b/plugins/provider/ofono/calls-ofono-origin.c
+@@ -44,6 +44,7 @@ struct _CallsOfonoOrigin {
+   gboolean              sending_tones;
+   GString              *tone_queue;
+   GHashTable           *calls;
++  char                *pending_dial;
+ 
+   CallsUssdState        ussd_state;
+ };
+@@ -309,12 +310,14 @@ calls_ofono_ussd_cancel_finish (CallsUssd    *ussd,
+ static void
+ dial_cb (GDBOVoiceCallManager *voice,
+          GAsyncResult         *res,
+-         CallsOfonoOrigin     *self)
++         CallsOfonoOrigin     *origin)
+ {
++  g_autoptr (CallsOfonoOrigin) self = origin;
+   gboolean ok;
+ 
+   g_autoptr (GError) error = NULL;
+ 
++  g_clear_pointer (&self->pending_dial, g_free);
+   ok = gdbo_voice_call_manager_call_dial_finish (voice, NULL, res, &error);
+   if (!ok) {
+     g_warning ("Error dialing number on modem `%s': %s",
+@@ -332,14 +335,34 @@ dial (CallsOrigin *origin, const gchar *number)
+ {
+   CallsOfonoOrigin *self = CALLS_OFONO_ORIGIN (origin);
+ 
++  GHashTableIter iter;
++  gpointer value;
++  gboolean duplicate = g_strcmp0 (self->pending_dial, number) == 0;
++
+   g_return_if_fail (self->voice != NULL);
+ 
++  g_hash_table_iter_init (&iter, self->calls);
++  while (!duplicate && g_hash_table_iter_next (&iter, NULL, &value)) {
++    CallsCall *call = CALLS_CALL (value);
++    duplicate = calls_call_get_state (call) != CALLS_CALL_STATE_DISCONNECTED &&
++      g_strcmp0 (calls_call_get_id (call), number) == 0;
++  }
++  if (duplicate) {
++    GApplication *app = g_application_get_default ();
++    g_debug ("Presenting the existing call instead of dialing it again");
++    if (app)
++      g_application_activate (app);
++    return;
++  }
++  g_free (self->pending_dial);
++  self->pending_dial = g_strdup (number);
++
+   gdbo_voice_call_manager_call_dial (self->voice,
+                                      number,
+                                      "default" /* default caller id settings */,
+                                      NULL,
+                                      (GAsyncReadyCallback) dial_cb,
+-                                     self);
++                                     g_object_ref (self));
+ }
+ 
+ 
+@@ -384,7 +407,7 @@ set_property (GObject      *object,
+ 
+   switch (property_id) {
+   case PROP_ID:
+-    /* we're using a hardcoded value, so let's ignore it */
++    /* The identity is derived from the modem object path. */
+     break;
+ 
+   case PROP_MODEM:
+@@ -408,7 +431,8 @@ get_property (GObject    *object,
+ 
+   switch (property_id) {
+   case PROP_ID:
+-    g_value_set_string (value, "ofono");
++    g_value_take_string (value,
++                         g_strdup_printf ("ofono:%s", g_dbus_proxy_get_object_path (G_DBUS_PROXY (self->modem))));
+     break;
+ 
+   case PROP_NAME:
+@@ -482,8 +506,9 @@ struct CallsVoiceCallProxyNewData {
+ static void
+ send_tones_cb (GDBOVoiceCallManager *voice,
+                GAsyncResult         *res,
+-               CallsOfonoOrigin     *self)
++               CallsOfonoOrigin     *origin)
+ {
++  g_autoptr (CallsOfonoOrigin) self = origin;
+   gboolean ok;
+   GError *error = NULL;
+ 
+@@ -504,7 +529,7 @@ send_tones_cb (GDBOVoiceCallManager *voice,
+                                              self->tone_queue->str,
+                                              NULL,
+                                              (GAsyncReadyCallback) send_tones_cb,
+-                                             self);
++                                             g_object_ref (self));
+ 
+     g_string_free (self->tone_queue, TRUE);
+     self->tone_queue = NULL;
+@@ -533,7 +558,7 @@ tone_cb (CallsOfonoOrigin *self,
+                                              key_str,
+                                              NULL,
+                                              (GAsyncReadyCallback) send_tones_cb,
+-                                             self);
++                                             g_object_ref (self));
+ 
+     self->sending_tones = TRUE;
+   }
+@@ -544,26 +569,26 @@ voice_call_proxy_new_cb (GDBusConnection                   *connection,
+                          GAsyncResult                      *res,
+                          struct CallsVoiceCallProxyNewData *data)
+ {
+-  CallsOfonoOrigin *self = data->self;
++  g_autoptr (CallsOfonoOrigin) self = data->self;
++  g_autoptr (GVariant) properties = data->properties;
+   GDBOVoiceCall *voice_call;
+ 
+   g_autoptr (GError) error = NULL;
+   const gchar *path;
+   CallsOfonoCall *call;
+ 
++  g_free (data);
+   voice_call = gdbo_voice_call_proxy_new_finish (res, &error);
+   if (!voice_call) {
+-    g_variant_unref (data->properties);
+-    g_free (data);
+     g_warning ("Error creating oFono VoiceCall proxy: %s",
+                error->message);
+     CALLS_ERROR (self, error);
+     return;
+   }
+ 
+-  call = calls_ofono_call_new (voice_call, data->properties);
+-  g_signal_connect_swapped (call, "tone",
+-                            G_CALLBACK (tone_cb), self);
++  call = calls_ofono_call_new (voice_call, properties);
++  g_signal_connect_object (call, "tone",
++                           G_CALLBACK (tone_cb), self, G_CONNECT_SWAPPED);
+ 
+   path = g_dbus_proxy_get_object_path (G_DBUS_PROXY (voice_call));
+   g_hash_table_insert (self->calls, g_strdup (path), call);
+@@ -572,6 +597,7 @@ voice_call_proxy_new_cb (GDBusConnection                   *connection,
+                          CALLS_CALL (call));
+ 
+   g_debug ("Call `%s' added", path);
++  g_object_unref (voice_call);
+ }
+ 
+ 
+@@ -591,7 +617,7 @@ call_added_cb (GDBOVoiceCallManager *voice,
+   }
+ 
+   data = g_new0 (struct CallsVoiceCallProxyNewData, 1);
+-  data->self = self;
++  data->self = g_object_ref (self);
+   data->properties = properties;
+   g_variant_ref (properties);
+ 
+@@ -646,8 +672,9 @@ call_removed_cb (GDBOVoiceCallManager *voice,
+ static void
+ get_calls_cb (GDBOVoiceCallManager *voice,
+               GAsyncResult         *res,
+-              CallsOfonoOrigin     *self)
++              CallsOfonoOrigin     *origin)
+ {
++  g_autoptr (CallsOfonoOrigin) self = origin;
+   gboolean ok;
+   GVariant *calls_with_properties = NULL;
+ 
+@@ -691,8 +718,9 @@ get_calls_cb (GDBOVoiceCallManager *voice,
+ static void
+ voice_new_cb (GDBusConnection  *connection,
+               GAsyncResult     *res,
+-              CallsOfonoOrigin *self)
++              CallsOfonoOrigin *origin)
+ {
++  g_autoptr (CallsOfonoOrigin) self = origin;
+   g_autoptr (GError) error = NULL;
+ 
+   self->voice = gdbo_voice_call_manager_proxy_new_finish (res, &error);
+@@ -704,24 +732,25 @@ voice_new_cb (GDBusConnection  *connection,
+     return;
+   }
+ 
+-  g_signal_connect (self->voice, "call-added",
+-                    G_CALLBACK (call_added_cb), self);
+-  g_signal_connect (self->voice, "call-removed",
+-                    G_CALLBACK (call_removed_cb), self);
++  g_signal_connect_object (self->voice, "call-added",
++                           G_CALLBACK (call_added_cb), self, 0);
++  g_signal_connect_object (self->voice, "call-removed",
++                           G_CALLBACK (call_removed_cb), self, 0);
+ 
+   gdbo_voice_call_manager_call_get_calls
+     (self->voice,
+     NULL,
+     (GAsyncReadyCallback) get_calls_cb,
+-    self);
++    g_object_ref (self));
+ }
+ 
+ 
+ static void
+ ussd_new_cb (GDBusConnection  *connection,
+              GAsyncResult     *res,
+-             CallsOfonoOrigin *self)
++             CallsOfonoOrigin *origin)
+ {
++  g_autoptr (CallsOfonoOrigin) self = origin;
+   g_autoptr (GError) error = NULL;
+ 
+   self->ussd = gdbo_supplementary_services_proxy_new_finish (res, &error);
+@@ -759,7 +788,7 @@ constructed (GObject *object)
+                                      g_dbus_proxy_get_object_path (modem_proxy),
+                                      NULL,
+                                      (GAsyncReadyCallback) voice_new_cb,
+-                                     self);
++                                     g_object_ref (self));
+ 
+   G_OBJECT_CLASS (calls_ofono_origin_parent_class)->constructed (object);
+ 
+@@ -769,7 +798,7 @@ constructed (GObject *object)
+                                          g_dbus_proxy_get_object_path (modem_proxy),
+                                          NULL,
+                                          (GAsyncReadyCallback) ussd_new_cb,
+-                                         self);
++                                         g_object_ref (self));
+ }
+ 
+ 
+@@ -779,6 +808,8 @@ dispose (GObject *object)
+   CallsOfonoOrigin *self = CALLS_OFONO_ORIGIN (object);
+ 
+   remove_calls (self, NULL);
++  g_clear_object (&self->voice);
++  g_clear_object (&self->ussd);
+   g_clear_object (&self->modem);
+   g_clear_object (&self->connection);
+ 
+@@ -795,6 +826,8 @@ finalize (GObject *object)
+     g_string_free (self->tone_queue, TRUE);
+   }
+   g_free (self->name);
++  g_clear_pointer (&self->calls, g_hash_table_unref);
++  g_free (self->pending_dial);
+ 
+   G_OBJECT_CLASS (calls_ofono_origin_parent_class)->finalize (object);
+ }
+@@ -823,7 +856,7 @@ calls_ofono_origin_class_init (CallsOfonoOriginClass *klass)
+   g_object_class_override_property (object_class, ID, NAME);    \
+   props[ID] = g_object_class_find_property(object_class, NAME);
+ 
+-  IMPLEMENTS (PROP_NAME, "id");
++  IMPLEMENTS (PROP_ID, "id");
+   IMPLEMENTS (PROP_NAME, "name");
+   IMPLEMENTS (PROP_CALLS, "calls");
+   IMPLEMENTS (PROP_COUNTRY_CODE, "country-code");
+diff --git a/plugins/provider/ofono/calls-ofono-provider.c b/plugins/provider/ofono/calls-ofono-provider.c
+index 7e6a7dd..3d60707 100644
+--- a/plugins/provider/ofono/calls-ofono-provider.c
++++ b/plugins/provider/ofono/calls-ofono-provider.c
+@@ -54,6 +54,7 @@ struct _CallsOfonoProvider {
+   GDBOManager     *manager;
+   /** Map of D-Bus object paths to a struct CallsModemData */
+   GHashTable      *modems;
++  GHashTable      *pending_modems;
+   /* A list of CallsOrigins */
+   GListStore      *origins;
+ };
+@@ -167,7 +168,11 @@ modem_check_ifaces (CallsOfonoProvider *self,
+ 
+   g_variant_get (ifaces, "as", &iter);
+ 
+-  voice = object_array_includes (iter, "org.ofono.VoiceCallManager");
++  g_object_set_data_full (G_OBJECT (modem), "calls-modem-ifaces",
++                          g_variant_ref (ifaces), (GDestroyNotify) g_variant_unref);
++  voice = object_array_includes (iter, "org.ofono.VoiceCallManager") &&
++    GPOINTER_TO_INT (g_object_get_data (G_OBJECT (modem), "calls-modem-online")) &&
++    GPOINTER_TO_INT (g_object_get_data (G_OBJECT (modem), "calls-modem-powered"));
+ 
+   path = g_dbus_proxy_get_object_path (G_DBUS_PROXY (modem));
+ 
+@@ -180,8 +185,10 @@ modem_check_ifaces (CallsOfonoProvider *self,
+     origin = calls_ofono_origin_new (modem);
+     g_list_store_append (self->origins, origin);
+   } else if (!voice && has_origin) {
++    g_debug ("Removing unavailable oFono Origin with path `%s'", path);
+     g_list_store_remove (self->origins, index);
+   }
++  update_status (self);
+ }
+ 
+ 
+@@ -191,20 +198,26 @@ modem_property_changed_cb (GDBOModem          *modem,
+                            GVariant           *value,
+                            CallsOfonoProvider *self)
+ {
+-  gchar *modem_name;
++  const gchar *modem_name;
++  GVariant *ifaces;
++  g_autoptr (GVariant) inner = g_variant_get_variant (value);
+ 
+   g_debug ("Modem property `%s' changed", name);
+ 
+-  if (g_strcmp0 (name, "Interfaces") != 0)
++  if (g_strcmp0 (name, "Interfaces") == 0)
++    ifaces = inner;
++  else if (g_strcmp0 (name, "Online") == 0 || g_strcmp0 (name, "Powered") == 0) {
++    g_object_set_data (G_OBJECT (modem),
++                       g_strcmp0 (name, "Online") == 0 ? "calls-modem-online" : "calls-modem-powered",
++                       GINT_TO_POINTER (g_variant_get_boolean (inner)));
++    ifaces = g_object_get_data (G_OBJECT (modem), "calls-modem-ifaces");
++  } else {
+     return;
++  }
+ 
+-  modem_name = g_object_get_data (G_OBJECT (modem),
+-                                  "calls-modem-name");
+-
+-  /* PropertyChanged gives us a variant gvariant containing a string array,
+-     but modem_check_ifaces expects the inner string array gvariant */
+-  value = g_variant_get_variant (value);
+-  modem_check_ifaces (self, modem, modem_name, value);
++  modem_name = g_object_get_data (G_OBJECT (modem), "calls-modem-name");
++  if (ifaces)
++    modem_check_ifaces (self, modem, modem_name, ifaces);
+ }
+ 
+ 
+@@ -212,9 +225,45 @@ struct CallsModemProxyNewData {
+   CallsOfonoProvider *self;
+   gchar              *name;
+   GVariant           *ifaces;
++  gboolean            online;
++  gboolean            powered;
++  gchar              *path;
++  GDBOManager        *manager;
+ };
+ 
+ 
++struct CallsModemPropertiesData {
++  CallsOfonoProvider *self;
++  GDBOModem *modem;
++};
++
++static void
++modem_properties_ready_cb (GDBOModem *modem, GAsyncResult *res,
++                           struct CallsModemPropertiesData *data)
++{
++  g_autoptr (GVariant) properties = NULL;
++  g_autoptr (GVariant) ifaces = NULL;
++  g_autoptr (GError) error = NULL;
++  gboolean online = FALSE, powered = FALSE;
++  const char *path = g_dbus_proxy_get_object_path (G_DBUS_PROXY (modem));
++
++  if (!gdbo_modem_call_get_properties_finish (modem, &properties, res, &error)) {
++    g_debug ("Cannot refresh modem %s: %s", path, error->message);
++  } else if (g_hash_table_lookup (data->self->modems, path) == modem) {
++    g_variant_lookup (properties, "Online", "b", &online);
++    g_variant_lookup (properties, "Powered", "b", &powered);
++    g_object_set_data (G_OBJECT (modem), "calls-modem-online", GINT_TO_POINTER (online));
++    g_object_set_data (G_OBJECT (modem), "calls-modem-powered", GINT_TO_POINTER (powered));
++    ifaces = g_variant_lookup_value (properties, "Interfaces", G_VARIANT_TYPE ("as"));
++    if (ifaces)
++      modem_check_ifaces (data->self, modem,
++                          g_object_get_data (G_OBJECT (modem), "calls-modem-name"), ifaces);
++  }
++  g_object_unref (data->self);
++  g_object_unref (data->modem);
++  g_free (data);
++}
++
+ static void
+ modem_proxy_new_cb (GDBusConnection               *connection,
+                     GAsyncResult                  *res,
+@@ -225,25 +274,27 @@ modem_proxy_new_cb (GDBusConnection               *connection,
+   const gchar *path;
+ 
+   modem = gdbo_modem_proxy_new_finish (res, &error);
+-  if (!modem) {
+-    g_variant_unref (data->ifaces);
+-    g_free (data->name);
+-    g_free (data);
+-    g_warning ("Error creating oFono Modem proxy: %s",
+-               error->message);
+-    return;
++  if (!modem || data->self->manager != data->manager ||
++      g_hash_table_lookup (data->self->pending_modems, data->path) != data) {
++    if (error)
++      g_debug ("Error creating oFono Modem proxy: %s", error->message);
++    g_clear_error (&error);
++    g_clear_object (&modem);
++    goto out;
+   }
+ 
+-  g_signal_connect (modem, "property-changed",
+-                    G_CALLBACK (modem_property_changed_cb),
+-                    data->self);
++  g_signal_connect_object (modem, "property-changed",
++                           G_CALLBACK (modem_property_changed_cb),
++                           data->self, 0);
+ 
+ 
+   /* We want to store the oFono modem's Name property so we can pass it
+      to our Origin when we create it */
+   g_object_set_data_full (G_OBJECT (modem), "calls-modem-name",
+-                          data->name, g_free);
++                          g_strdup (data->name), g_free);
+ 
++  g_object_set_data (G_OBJECT (modem), "calls-modem-online", GINT_TO_POINTER (data->online));
++  g_object_set_data (G_OBJECT (modem), "calls-modem-powered", GINT_TO_POINTER (data->powered));
+   path = g_dbus_proxy_get_object_path (G_DBUS_PROXY (modem));
+ 
+   g_hash_table_insert (data->self->modems, g_strdup (path), modem);
+@@ -252,20 +303,40 @@ modem_proxy_new_cb (GDBusConnection               *connection,
+   if (data->ifaces) {
+     modem_check_ifaces (data->self, modem,
+                         data->name, data->ifaces);
+-    g_variant_unref (data->ifaces);
+   }
+ 
+-  g_free (data);
+-
++  /* Signals may change Powered/Online while proxy creation is pending.
++   * Read the current native state after subscribing, rather than retaining
++   * an obsolete ModemAdded/GetModems snapshot forever. */
++  struct CallsModemPropertiesData *refresh = g_new0 (struct CallsModemPropertiesData, 1);
++  refresh->self = g_object_ref (data->self);
++  refresh->modem = g_object_ref (modem);
++  gdbo_modem_call_get_properties (modem, NULL,
++                                  (GAsyncReadyCallback) modem_properties_ready_cb, refresh);
+   g_debug ("Modem `%s' added", path);
++out:
++  if (g_hash_table_lookup (data->self->pending_modems, data->path) == data)
++    g_hash_table_remove (data->self->pending_modems, data->path);
++  g_clear_pointer (&data->ifaces, g_variant_unref);
++  g_object_unref (data->self);
++  g_object_unref (data->manager);
++  g_free (data->path);
++  g_free (data->name);
++  g_free (data);
+ }
+ 
+ 
+ static gchar *
+-modem_properties_get_name (GVariant *properties)
++modem_properties_get_name (const gchar *path, GVariant *properties)
+ {
+   gchar *name = NULL;
+   gboolean ok;
++  guint64 slot;
++
++  /* RIL modem indices are slot identities, unlike the modem Serial (IMEI). */
++  if (g_str_has_prefix (path, "/ril_") &&
++      g_ascii_string_to_unsigned (path + 5, 10, 0, G_MAXUINT - 1, &slot, NULL))
++    return g_strdup_printf (_("SIM %u"), (guint) slot + 1);
+ 
+ #define try(prop)                                       \
+   ok = g_variant_lookup (properties, prop, "s", &name); \
+@@ -306,21 +377,23 @@ modem_added_cb (GDBOManager        *manager,
+ 
+   g_debug ("Adding modem `%s'", path);
+ 
+-  if (g_hash_table_lookup (self->modems, path)) {
+-    g_warning ("Modem `%s' already exists", path);
++  if (g_hash_table_contains (self->modems, path) ||
++      g_hash_table_contains (self->pending_modems, path)) {
++    g_debug ("Modem `%s' already exists or is pending", path);
+     return;
+   }
+ 
+   data = g_new0 (struct CallsModemProxyNewData, 1);
+-  data->self = self;
+-  data->name = modem_properties_get_name (properties);
++  data->self = g_object_ref (self);
++  data->path = g_strdup (path);
++  data->manager = g_object_ref (manager);
++  g_hash_table_insert (self->pending_modems, g_strdup (path), data);
++  data->name = modem_properties_get_name (path, properties);
++  g_variant_lookup (properties, "Online", "b", &data->online);
++  g_variant_lookup (properties, "Powered", "b", &data->powered);
+ 
+   data->ifaces = g_variant_lookup_value
+                    (properties, "Interfaces", G_VARIANT_TYPE_ARRAY);
+-  if (data->ifaces) {
+-    g_variant_ref (data->ifaces);
+-  }
+-
+   gdbo_modem_proxy_new (self->connection,
+                         G_DBUS_PROXY_FLAGS_NONE,
+                         g_dbus_proxy_get_name (G_DBUS_PROXY (manager)),
+@@ -345,6 +418,7 @@ modem_removed_cb (GDBOManager        *manager,
+   if (ofono_find_origin_index (self, path, &index))
+     g_list_store_remove (self->origins, index);
+ 
++  g_hash_table_remove (self->pending_modems, path);
+   g_hash_table_remove (self->modems, path);
+ 
+   g_debug ("Modem `%s' removed", path);
+@@ -420,7 +494,7 @@ ofono_appeared_cb (GDBusConnection    *connection,
+                    CallsOfonoProvider *self)
+ {
+   g_autoptr (GError) error = NULL;
+-  self->connection = connection;
++  g_set_object (&self->connection, connection);
+   if (!self->connection) {
+     g_warning ("Error creating D-Bus connection: %s",
+                error->message);
+@@ -460,6 +534,9 @@ ofono_vanished_cb (GDBusConnection    *connection,
+ {
+   g_debug ("Ofono vanished from D-Bus");
+   g_list_store_remove_all (self->origins);
++  g_hash_table_remove_all (self->modems);
++  g_hash_table_remove_all (self->pending_modems);
++  g_clear_object (&self->manager);
+   update_status (self);
+ }
+ 
+@@ -488,6 +565,10 @@ dispose (GObject *object)
+ {
+   CallsOfonoProvider *self = CALLS_OFONO_PROVIDER (object);
+ 
++  if (self->watch_id) {
++    g_bus_unwatch_name (self->watch_id);
++    self->watch_id = 0;
++  }
+   g_clear_object (&self->manager);
+   g_clear_object (&self->connection);
+ 
+@@ -503,6 +584,7 @@ finalize (GObject *object)
+   g_object_unref (self->origins);
+   g_free (self->status);
+   g_hash_table_unref (self->modems);
++  g_hash_table_unref (self->pending_modems);
+ 
+   G_OBJECT_CLASS (calls_ofono_provider_parent_class)->finalize (object);
+ }
+@@ -544,6 +626,7 @@ calls_ofono_provider_init (CallsOfonoProvider *self)
+   self->status = g_strdup (_("Initialized"));
+   self->modems = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                         g_free, g_object_unref);
++  self->pending_modems = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+   self->origins = g_list_store_new (CALLS_TYPE_ORIGIN);
+ }
+ 
+diff --git a/po/zh_CN.po b/po/zh_CN.po
+index a44cec3..d66c3c1 100644
+--- a/po/zh_CN.po
++++ b/po/zh_CN.po
+@@ -572,3 +572,8 @@ msgstr "自动连接"
+ 
+ #~ msgid "Manage Account"
+ #~ msgstr "管理帐号"
++
++#. Translators: the physical SIM slot used for a cellular call.
++#, c-format
++msgid "SIM %u"
++msgstr "卡槽 %u"

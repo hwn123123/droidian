@@ -68,6 +68,7 @@ bash "$here/install-sensor-packages.sh" "$root"
 bash "$here/install-nfc-plugin.sh" "$root"
 bash "$here/install-fingerprint-packages.sh" "$root"
 bash "$here/install-control-center.sh" "$root"
+bash "$here/install-calls-plugin.sh" "$root"
 work=$(mktemp -d "$repo/out/shennong/device-config.XXXXXX")
 cp -a "$here/../packages/adaptation-xiaomi-shennong" "$work/source"
 (cd "$work/source" && dpkg-buildpackage --no-sign -b)
@@ -83,7 +84,7 @@ bash "$here/install-binder-compat.sh" "$root"
 bash "$here/install-drm-compat.sh" "$root"
 bash "$here/install-usb-framework.sh" "$root"
 bash "$here/install-cellular-runtime.sh" "$root"
-radio_packages=("$repo/out/shennong/telephony-packages/"ofono-binder-plugin_*+shennong3_arm64.deb)
+radio_packages=("$repo/out/shennong/telephony-packages/"ofono-binder-plugin_*+shennong4_arm64.deb)
 [ "${#radio_packages[@]}" = 1 ] && [ -s "${radio_packages[0]}" ] || {
     echo 'Build the device AIDL plugin with tools/build-ofono-plugin.sh first.' >&2
     exit 1
@@ -91,6 +92,8 @@ radio_packages=("$repo/out/shennong/telephony-packages/"ofono-binder-plugin_*+sh
 install -m644 "${radio_packages[0]}" "$root/tmp/shennong-ofono.deb"
 chroot "$root" dpkg -i /tmp/shennong-ofono.deb
 rm "$root/tmp/shennong-ofono.deb"
+bash "$here/install-qti-ims-plugin.sh" "$root"
+bash "$here/install-audio-passthrough.sh" "$root"
 bridge_packages=("$repo/out/shennong/telephony-packages/"ofono2mm_*+shennong16_all.deb)
 [ "${#bridge_packages[@]}" = 1 ] && [ -s "${bridge_packages[0]}" ] || {
     echo 'Build the device modem bridge with tools/build-ofono2mm.sh first.' >&2

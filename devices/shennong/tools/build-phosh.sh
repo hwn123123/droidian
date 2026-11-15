@@ -6,7 +6,7 @@ repo=$(cd "$here/../../.." && pwd)
 out=${SHENNONG_UI_OUT:-$repo/out/shennong/ui-packages}
 cache=${SHENNONG_UI_CACHE:-$repo/out/shennong/ui-source-cache}
 revision=bee1861911b0cf75f50ab00cea5a84ed98d9c32f
-version=0.55.0+git20260824233009.bee1861.next.phosh.0.55+shennong15
+version=0.55.0+git20260824233009.bee1861.next.phosh.0.55+shennong16
 [[ $(dpkg --print-architecture) == arm64 ]]
 mkdir -p "$cache" "$out"
 work=$(mktemp -d)

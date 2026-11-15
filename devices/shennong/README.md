@@ -339,6 +339,106 @@ the Chinese success dialog and Done button. The saved count updated to two;
 inhibitors after completion. NFC translations are packaged, but physical tag
 operations remain unverified as described above.
 
+### Native Calls provider and dual-SIM routing
+
+`tools/build-calls-plugin.sh DROIDIAN_BUILD_ROOT` builds Calls 51.1 at
+`d3a2a2242fef42f2e210c564e0220857e575f40c` with its pinned libcall-ui
+subproject. It applies `patches/gnome-calls/` and packages the native
+application, oFono provider and Chinese catalog into the verified `51.1-1`
+distribution package as `51.1-1+shennong3`. Provider ABI requirements are
+checked against the signed distribution executable. `install-calls-plugin.sh`
+installs the result during normal offline image preparation. No separate
+dialer, SIM-selection daemon or modem polling loop is added.
+
+Reopening Calls while a native call remains connected now presents the
+existing call controls. Repeated dialing of the same number on the same
+origin presents that call instead of creating a second held/active pair;
+a pending dial is also protected against duplicate submission. Other
+numbers and independent SIM origins retain normal native routing. Call
+pages use widget identity rather than the phone number as a unique stack
+name, avoiding duplicate-name collisions with held calls and dual SIMs.
+
+This device exposes VoiceCallManager for the empty slot as well as the active
+slot. The previous provider offered both regardless of `Online`, and its
+origin property mapping reused the name property ID for the ID property.
+A real 10086 attempt therefore selected offline `/ril_1` and returned
+`org.ofono.Error.NotAvailable` before reaching the active SIM.
+
+The provider now offers powered, online modems that expose VoiceCallManager.
+Each origin has a stable identity derived from its modem object path, and RIL
+slots are labelled **卡槽 1 / 卡槽 2**, rather than displaying the modem's IMEI.
+Both online slots remain separately selectable in the existing Calls UI;
+with one available slot, ordinary dialing uses that slot. Native modem
+`Online`, `Powered` and `Interfaces` notifications add or remove origins.
+Async call jobs retain their origin until completion and proxy signals are
+bound to object lifetimes when a SIM goes offline. Existing call objects,
+history and incoming-call handling remain with the distribution application.
+
+The provider refreshes native `GetProperties` after subscribing to modem
+signals, since the earlier discovery snapshot can already be obsolete. It
+also deduplicates pending modem proxies and drops old proxies when oFono
+vanishes. Restarting the radio service therefore repopulates the existing
+dialer without retaining an offline modem or requiring an app restart.
+
+The installed provider is exercised by `tests/test_calls_dual_sim.py` on a
+private D-Bus oFono service. Coverage includes empty SIM2 enumerated first,
+single-SIM routing, explicit routing through each independent origin with both
+SIMs online, online/offline changes, excluding powered-off SIM2, refreshing
+stale discovery properties and reconnecting after the backend releases its
+bus name, and suppressing duplicate pending dials. These checks never dial the real radio. Two physical SIMs together
+and incoming calls still require device verification.
+
+### Native IMS and call audio
+
+`tools/build-qti-ims-plugin.sh DROIDIAN_BUILD_ROOT` builds the native UBports
+Qualcomm oFono extension at `71b9d419c3628b10208b04d0e5117f33815a1ac6`,
+against the pinned Binder extension ABI. `patches/ofono-qti/` handles the
+stable AIDL response error prefix and SUCCESS value, serializes native IMS
+voice/SMS service capability requests, and leaves HIDL handling separate.
+The installed extension is selected by oFono's existing `extPlugin = qti`
+configuration. Registration and recovery remain in oFono's native IMS state
+machine; no registration polling script or fabricated registration is used.
+Normal builds do not dump raw Binder parcels; errors remain visible.
+
+`tools/build-audio-passthrough.sh DROIDIAN_BUILD_ROOT` extends Droidian's
+existing `audiosystem-passthrough` at
+`f49813cf9d84bccad4c090e0b554d3219bb5dfec`. The stock device publishes
+`vendor.qti.hardware.radio.am.IQcRilAudio/slot1` and `/slot2` through stable
+AIDL, while the distribution bridge supported only the older HIDL API.
+The native helper also scans VINTF manifest fragments when the older Pulse
+module autodetects AudioFlinger from a missing monolithic HIDL declaration.
+An explicit helper `--type` still takes precedence. This keeps the managed
+startup path on QTI, matching the successful standalone test.
+The new native transport follows the existing oFono Binder device, transport
+and slot configuration. It registers a VINTF-stable request interface,
+receives token/string requests, forwards parameters through module-droid-hidl
+to the real audio HAL, and returns the matching token through the vendor
+response interface. Session IDs and call state are received from the modem,
+not selected or hardcoded by the frontend. HIDL devices keep their original
+transport. module-droid-hidl owns the helper lifetime; the redundant global
+user-service instance is disabled during image preparation.
+
+On 2026-11-15 a real SIM1 call to 10086 reached active state and hung up
+normally. The user confirmed sound from both earpiece and speakerphone. The
+new bridge recorded the modem's actual `call_state=2` on the slot1 session
+and its return to `call_state=1` on hangup. A later test using the normal
+module-managed helper confirmed earpiece and speakerphone audio, lifting and
+lowering the device without unexpected blanking, and successful UI hangup.
+The modem call list was empty afterward, with CallAudio back in mode 0 and
+its speaker override cleared. Native IMS reports registered
+and voice-capable. This validates outgoing signaling and downlink audio;
+microphone transmission, incoming calls, two physical SIMs and cold-boot
+recovery still need verification. A Calls/CallAudio mode-completion timeout
+has also appeared after hangup and remains under investigation.
+
+Phosh's previous missing-proximity fallback unconditionally blanked the
+screen when a call became active. `0007-keep-call-screen-without-proximity`
+removes that assumption: missing sensor data keeps normal screen controls,
+while a working, enabled proximity sensor retains native near/far handling.
+The user confirmed this updated call-screen behavior on 2026-11-15.
+Distance-based automatic blanking remains unavailable until the sensor path
+is repaired; this change does not fabricate proximity data.
+
 ### Network and camera module initialization
 
 Adaptation 0.1.26 corrects two missing stock module loads. The previously
@@ -377,7 +477,7 @@ The pinned Phosh build now applies the phone home, backlight, edge navigation
 and lock-screen status patches in `patches/phosh/`. Build it with
 `tools/build-phosh.sh`; `tools/install-ui-packages.py` installs the matching
 shell, common files, plugins, mobile tweaks and libphosh package into an
-offline device image. The final UI package version is `+shennong15`.
+offline device image. The final UI package version is `+shennong16`.
 
 Adaptation 0.1.28 defaults to Inter 15 / Noto Sans CJK SC 15, Monospace 13 and
 native text scaling 1.15. These remain normal GNOME settings and can be
@@ -404,7 +504,7 @@ controller because their event propagation excludes the parent window. Wide
 desktop layouts retain the existing panel-history shortcut. Phosh dismisses
 its native on-screen keyboard before forwarding Back to an application.
 
-The matching `+shennong4` Settings and `+shennong15` Phosh packages were installed
+The matching `+shennong4` Settings and `+shennong16` Phosh packages were installed
 on 2026-11-15. Actual touchscreen events from both screen edges exercised native
 navigation. Checks confirmed returning from the fingerprint page to the Settings
 list, cancelling the delete confirmation without removing either saved template,

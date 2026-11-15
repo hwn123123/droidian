@@ -1,0 +1,44 @@
+--- a/src/proximity.c
++++ b/src/proximity.c
+@@ -150,22 +150,12 @@
+ }
+ 
+ static void
+-on_call_state_changed (PhoshProximity *self,
+-                       GParamSpec     *pspec,
+-                       PhoshCall      *call)
+-{
+-  if (cui_call_get_state (CUI_CALL (call)) == CUI_CALL_STATE_ACTIVE)
+-    phosh_shell_enable_power_save (phosh_shell_get_default (), TRUE);
+-}
+-
+-static void
+ on_calls_manager_active_call_changed (PhoshProximity    *self,
+                                       GParamSpec        *pspec,
+                                       PhoshCallsManager *calls_manager)
+ {
+   gboolean active;
+   const char *handle;
+-  PhoshCall *call;
+ 
+   g_return_if_fail (PHOSH_IS_PROXIMITY (self));
+   g_return_if_fail (PHOSH_IS_CALLS_MANAGER (calls_manager));
+@@ -176,15 +166,9 @@
+   if (g_settings_get_boolean (self->settings, "enable-proximity-sensor") &&
+       self->has_proximity) {
+     phosh_proximity_claim_proximity (self, active);
+-  } else {
+-    if (active) {
+-      call = phosh_calls_manager_get_call (self->calls_manager, handle);
+-      g_signal_connect_swapped (call,
+-                                "notify::state",
+-                                G_CALLBACK (on_call_state_changed),
+-                                self);
+-    }
+-  }
++  }
++  /* Missing proximity data is not evidence that the handset is near an ear.
++   * Preserve normal screen/idle controls, including for speakerphone calls. */
+   /* TODO: if call is over wait until we hit the threshold */
+ }
+ 

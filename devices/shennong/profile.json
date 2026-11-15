@@ -23,6 +23,7 @@
     "lxc-android",
     "linux-initramfs-halium-generic",
     "ofono-binder-plugin",
-    "ofono2mm"
+    "ofono2mm",
+    "gnome-calls"
   ]
 }

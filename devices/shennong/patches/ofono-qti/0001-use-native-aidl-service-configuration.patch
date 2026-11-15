@@ -1,0 +1,212 @@
+diff --git a/src/qti_ims.c b/src/qti_ims.c
+index 1b5f556..74ee103 100644
+--- a/src/qti_ims.c
++++ b/src/qti_ims.c
+@@ -136,8 +136,8 @@ qti_ims_result_request_complete(
+     DBG("qti_ims_result_request_complete: %d", result);
+ 
+     if (req->complete) {
+-        req->complete(req->ext, result ? BINDER_EXT_IMS_RESULT_ERROR :
+-            BINDER_EXT_IMS_RESULT_OK, req->user_data);
++        req->complete(req->ext, qti_radio_ext_result_is_success(radio_ext, result) ?
++            BINDER_EXT_IMS_RESULT_OK : BINDER_EXT_IMS_RESULT_ERROR, req->user_data);
+     }
+ }
+ 
+@@ -199,6 +199,12 @@ qti_ims_reg_status_response(
+     GBinderReader reader_copy;
+ 
+     gbinder_reader_copy(&reader_copy, reader);
++    /* Every solicited response starts with a result, before its parcelable. */
++    gint32 result;
++    if (!gbinder_reader_read_int32(&reader_copy, &result) || !qti_radio_ext_result_is_success(radio_ext, result)) {
++        ofono_warn("IMS registration query failed");
++        return;
++    }
+     state = qti_radio_ext_read_ims_reg_status_info(radio_ext, &reader_copy);
+ 
+     if (state == QTI_RADIO_REG_STATE_FAILED_TO_READ) {
+diff --git a/src/qti_ims_call.c b/src/qti_ims_call.c
+index 7efa846..d216a3a 100644
+--- a/src/qti_ims_call.c
++++ b/src/qti_ims_call.c
+@@ -389,7 +389,7 @@ qti_ims_call_result_response(
+ 
+     if (complete) {
+         complete(req->ext,
+-            (result == QTI_RADIO_ERROR_SUCCESS) ?
++            qti_radio_ext_result_is_success(radio, result) ?
+                 BINDER_EXT_CALL_RESULT_OK :
+                 BINDER_EXT_CALL_RESULT_ERROR,
+             req->user_data);
+diff --git a/src/qti_radio_ext.c b/src/qti_radio_ext.c
+index bff7934..02c60d5 100644
+--- a/src/qti_radio_ext.c
++++ b/src/qti_radio_ext.c
+@@ -100,7 +100,7 @@ static guint qti_radio_ext_signals[SIGNAL_COUNT] = { 0 };
+ 
+ GLogModule qti_radio_ext_binder_log_module = {
+     .max_level = GLOG_LEVEL_VERBOSE,
+-    .level = GLOG_LEVEL_VERBOSE,
++    .level = GLOG_LEVEL_INHERIT,
+     .flags = GLOG_FLAG_HIDE_NAME
+ };
+ 
+@@ -248,6 +248,16 @@ qti_radio_ext_dump_request(
+     gutil_log_dump(log, level, "  ", data, size);
+ }
+ 
++gboolean
++qti_radio_ext_result_is_success(
++    QtiRadioExt* self,
++    gint32 result)
++{
++    /* AIDL ErrorCode has INVALID=0 and SUCCESS=1; HIDL SUCCESS is zero. */
++    return result == (self->iface->type == QTI_RADIO_IFACE_TYPE_AIDL ?
++        QTI_RADIO_ERROR_SUCCESS : 0);
++}
++
+ QTI_RADIO_REG_STATE
+ qti_radio_ext_read_ims_reg_status_info(
+     QtiRadioExt* self,
+@@ -261,6 +271,12 @@ qti_radio_ext_read_sms_send_status(
+     QtiRadioExt* self,
+     GBinderReader* reader)
+ {
++    if (self->iface->type == QTI_RADIO_IFACE_TYPE_AIDL) {
++        gint32 result;
++        if (!gbinder_reader_read_int32(reader, &result) ||
++            !qti_radio_ext_result_is_success(self, result))
++            return QTI_RADIO_SEND_STATUS_ERROR_FALLBACK;
++    }
+     return self->iface->read_sms_send_status(self, reader);
+ }
+ 
+@@ -783,6 +799,16 @@ qti_radio_ext_set_reg_state(
+     GDestroyNotify destroy,
+     void* user_data)
+ {
++    /* AIDL requestRegistrationChange controls a registration test override.
++     * Use the service capability API for the native enable/disable policy. */
++    if (self->iface->set_service_status_args) {
++        return qti_radio_ext_result_request_submit(self,
++            QTI_RADIO_EXT_REQ_SET_SERVICE_STATUS,
++            self->iface->set_service_status_args,
++            complete, destroy, user_data,
++            state != BINDER_EXT_IMS_REGISTRATION_OFF);
++    }
++
+     QTI_RADIO_REG_STATE reg_state = qti_radio_ext_reg_state(state);
+ 
+     DBG("Setting registration state %d", reg_state);
+diff --git a/src/qti_radio_ext.h b/src/qti_radio_ext.h
+index 0bd1d65..a2e5179 100644
+--- a/src/qti_radio_ext.h
++++ b/src/qti_radio_ext.h
+@@ -99,6 +99,11 @@ qti_radio_ext_cancel(
+     QtiRadioExt* self,
+     guint id);
+ 
++gboolean
++qti_radio_ext_result_is_success(
++    QtiRadioExt* self,
++    gint32 result);
++
+ QTI_RADIO_REG_STATE
+ qti_radio_ext_read_ims_reg_status_info(
+     QtiRadioExt* self,
+diff --git a/src/qti_radio_ext_aidl.c b/src/qti_radio_ext_aidl.c
+index d641631..764daa9 100644
+--- a/src/qti_radio_ext_aidl.c
++++ b/src/qti_radio_ext_aidl.c
+@@ -780,6 +780,46 @@ qti_radio_ext_aidl_set_reg_state_args(
+     gbinder_writer_append_int32(args, va_arg(va, gint32));
+ }
+ 
++/* Match ServiceStatusInfo/StatusForAccessTech.writeToParcel in the stock
++ * IMS client. Enable voice and SMS together on the cellular IMS transport. */
++static
++void
++qti_radio_ext_aidl_set_service_status_args(
++    GBinderWriter* writer,
++    va_list va)
++{
++    gboolean enabled = va_arg(va, int);
++    const gint32 status = enabled ? QTI_RADIO_STATUS_ENABLED : QTI_RADIO_STATUS_DISABLED;
++    const gint32 types[] = { QTI_RADIO_CALL_TYPE_VOICE, QTI_RADIO_CALL_TYPE_SMS };
++    guint i;
++
++    gbinder_writer_append_int32(writer, G_N_ELEMENTS(types));
++    for (i = 0; i < G_N_ELEMENTS(types); i++) {
++        gint32 service_start, access_start;
++        gbinder_writer_append_int32(writer, 1);
++        service_start = gbinder_writer_bytes_written(writer);
++        gbinder_writer_append_int32(writer, 0);
++        gbinder_writer_append_bool(writer, TRUE);
++        gbinder_writer_append_int32(writer, types[i]);
++        gbinder_writer_append_int32(writer, status);
++        gbinder_writer_append_int32(writer, 0);
++        gbinder_writer_append_int32(writer, 1); /* accTechStatus array */
++        gbinder_writer_append_int32(writer, 1);
++        access_start = gbinder_writer_bytes_written(writer);
++        gbinder_writer_append_int32(writer, 0);
++        gbinder_writer_append_int32(writer, QTI_RADIO_TECH_LTE);
++        gbinder_writer_append_int32(writer, status);
++        gbinder_writer_append_int32(writer, 0);
++        gbinder_writer_append_bool(writer, FALSE); /* no registration override */
++        gbinder_writer_append_int32(writer, 0); /* null RegistrationInfo */
++        gbinder_writer_overwrite_int32(writer, access_start,
++            gbinder_writer_bytes_written(writer) - access_start);
++        gbinder_writer_append_int32(writer, QTI_RADIO_RTT_MODE_DISABLED);
++        gbinder_writer_overwrite_int32(writer, service_start,
++            gbinder_writer_bytes_written(writer) - service_start);
++    }
++}
++
+ static
+ void
+ qti_radio_ext_aidl_dial_args(
+@@ -1135,6 +1175,7 @@ const QtiRadioExtIface qti_radio_ext_iface_aidl = {
+     .dev = GBINDER_DEFAULT_BINDER,
+ 
+     .req_codes = {
++        [QTI_RADIO_EXT_REQ_SET_SERVICE_STATUS] = QTI_RADIO_AIDL_REQ_SET_SERVICE_STATUS,
+         [QTI_RADIO_EXT_REQ_DIAL] = QTI_RADIO_AIDL_REQ_DIAL,
+         [QTI_RADIO_EXT_REQ_ANSWER] = QTI_RADIO_AIDL_REQ_ANSWER,
+         [QTI_RADIO_EXT_REQ_HANGUP] = QTI_RADIO_AIDL_REQ_HANGUP,
+@@ -1147,6 +1188,7 @@ const QtiRadioExtIface qti_radio_ext_iface_aidl = {
+         [QTI_RADIO_EXT_REQ_ACK_SMS_REPORT] = QTI_RADIO_AIDL_REQ_ACK_SMS_REPORT,
+     },
+     .resp_codes = {
++        [QTI_RADIO_EXT_REQ_SET_SERVICE_STATUS] = QTI_RADIO_AIDL_RESP_SET_SERVICE_STATUS,
+         [QTI_RADIO_EXT_REQ_DIAL] = QTI_RADIO_AIDL_RESP_DIAL,
+         [QTI_RADIO_EXT_REQ_ANSWER] = QTI_RADIO_AIDL_RESP_ANSWER,
+         [QTI_RADIO_EXT_REQ_HANGUP] = QTI_RADIO_AIDL_RESP_HANGUP,
+@@ -1170,6 +1212,7 @@ const QtiRadioExtIface qti_radio_ext_iface_aidl = {
+     .answer_args = qti_radio_ext_aidl_answer_args,
+     .hangup_args = qti_radio_ext_aidl_hangup_args,
+     .set_reg_state_args = qti_radio_ext_aidl_set_reg_state_args,
++    .set_service_status_args = qti_radio_ext_aidl_set_service_status_args,
+     .send_ims_sms_args = qti_radio_ext_aidl_send_ims_sms_args,
+     .acknowledge_sms_args = qti_radio_ext_aidl_acknowledge_sms_args,
+     .acknowledge_sms_report_args = qti_radio_ext_aidl_acknowledge_sms_report_args,
+diff --git a/src/qti_radio_ext_iface.h b/src/qti_radio_ext_iface.h
+index 48db4a0..3bbe84f 100644
+--- a/src/qti_radio_ext_iface.h
++++ b/src/qti_radio_ext_iface.h
+@@ -41,6 +41,7 @@ typedef enum qti_radio_ext_req_id {
+     QTI_RADIO_EXT_REQ_RESUME,
+     QTI_RADIO_EXT_REQ_REQ_REG_CHANGE,
+     QTI_RADIO_EXT_REQ_GET_IMS_REG_STATE,
++    QTI_RADIO_EXT_REQ_SET_SERVICE_STATUS,
+     QTI_RADIO_EXT_REQ_SEND_IMS_SMS,
+     QTI_RADIO_EXT_REQ_ACK_SMS,
+     QTI_RADIO_EXT_REQ_ACK_SMS_REPORT,
+@@ -71,6 +72,7 @@ struct qti_radio_ext_iface {
+     QtiRadioExtArgWriteFunc answer_args;
+     QtiRadioExtArgWriteFunc hangup_args;
+     QtiRadioExtArgWriteFunc set_reg_state_args;
++    QtiRadioExtArgWriteFunc set_service_status_args;
+     QtiRadioExtArgWriteFunc send_ims_sms_args;
+     QtiRadioExtArgWriteFunc acknowledge_sms_args;
+     QtiRadioExtArgWriteFunc acknowledge_sms_report_args;

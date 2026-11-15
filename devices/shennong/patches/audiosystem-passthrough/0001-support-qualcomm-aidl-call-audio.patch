@@ -1,0 +1,321 @@
+diff --git a/src/impl-qti.c b/src/impl-qti.c
+index 29eb6cb..187852f 100644
+--- a/src/impl-qti.c
++++ b/src/impl-qti.c
+@@ -40,6 +40,11 @@
+ #include "logging.h"
+ #include "dbus-comms.h"
+ 
++#define QCRIL_AUDIO_AIDL "vendor.qti.hardware.radio.am.IQcRilAudio"
++#define QCRIL_REQUEST_AIDL "vendor.qti.hardware.radio.am.IQcRilAudioRequest"
++#define QCRIL_RESPONSE_AIDL "vendor.qti.hardware.radio.am.IQcRilAudioResponse"
++#define QCRIL_AIDL_HASH "7807b67b5d557d9479da5c0f34c525bf48aaec90"
++
+ #define BINDER_DEVICE                       GBINDER_DEFAULT_HWBINDER
+ #define QCRIL_IFACE_HW_RADIO_1_0(x)         "vendor.qti.hardware.radio.am@1.0::" x
+ #define QCRIL_AUDIO_HW_RADIO_1_0             QCRIL_IFACE_HW_RADIO_1_0("IQcRilAudio")
+@@ -90,6 +95,7 @@ typedef struct am_client {
+     GBinderLocalObject* local;
+     GBinderRemoteObject* remote;
+     GBinderClient* client;
++    GBinderClient* response;
+     gulong wait_id;
+     gulong death_id;
+ } AmClient;
+@@ -100,6 +106,8 @@ struct hidl_app {
+     GBinderServiceManager* sm;
+     GSList* clients;
+     DBusComms *dbus;
++    gboolean aidl;
++    gchar *device;
+ };
+ 
+ static HidlApp _app;
+@@ -118,8 +126,16 @@ am_remote_died(
+     AmClient* am = user_data;
+ 
+     DBG("%s has died", am->fqname);
++    gbinder_remote_object_remove_handler(am->remote, am->death_id);
++    am->death_id = 0;
+     gbinder_remote_object_unref(am->remote);
+     am->remote = NULL;
++    gbinder_client_unref(am->response);
++    am->response = NULL;
++    gbinder_client_unref(am->client);
++    am->client = NULL;
++    gbinder_local_object_drop(am->local);
++    am->local = NULL;
+ 
+     /* Wait for it to re-appear */
+     am->wait_id = gbinder_servicemanager_add_registration_handler(am->sm,
+@@ -219,6 +235,129 @@ am_client_callback(
+     return NULL;
+ }
+ 
++/* Stable AIDL uses asynchronous requests (token, UTF-16 string), with a
++ * separate response interface returned by setRequestInterface(). */
++static GBinderLocalReply*
++am_client_aidl_callback(GBinderLocalObject* obj, GBinderRemoteRequest* req,
++    guint code, guint flags, int* status, void* user_data)
++{
++    AmClient* am = user_data;
++    GBinderReader reader;
++    gint32 token;
++    gchar* str;
++    const char* iface = gbinder_remote_request_interface(req);
++
++    *status = GBINDER_STATUS_OK;
++    if (g_strcmp0(iface, QCRIL_REQUEST_AIDL))
++        goto invalid;
++    if (code == 16777215 || code == 16777214) {
++        GBinderLocalReply* reply = gbinder_local_object_new_reply(obj);
++        GBinderWriter writer;
++        gbinder_local_reply_init_writer(reply, &writer);
++        gbinder_writer_append_int32(&writer, 0); /* EX_NONE */
++        if (code == 16777215)
++            gbinder_writer_append_int32(&writer, 1);
++        else
++            gbinder_writer_append_string16(&writer, QCRIL_AIDL_HASH);
++        return reply;
++    }
++    gbinder_remote_request_init_reader(req, &reader);
++    if ((code != 1 && code != 2) ||
++        !gbinder_reader_read_int32(&reader, &token))
++        goto invalid;
++    str = gbinder_reader_read_string16(&reader);
++    if (!str || !am->response) {
++        g_free(str);
++        goto invalid;
++    }
++    if (!am->app->config->dummy_mode) {
++        GBinderLocalRequest* response = gbinder_client_new_request(am->response);
++        GBinderWriter writer;
++        gchar* values = NULL;
++        gint result;
++        DBG("AIDL audio %s %s token %d: %s", am->slot,
++            code == 1 ? "query" : "set", token, str);
++        gbinder_local_request_init_writer(response, &writer);
++        gbinder_writer_append_int32(&writer, token);
++        if (code == 1) {
++            result = dbus_comms_get_parameters(am->app->dbus, str, &values);
++            gbinder_writer_append_string16(&writer, values ? values : "");
++        } else {
++            result = dbus_comms_set_parameters(am->app->dbus, str);
++            gbinder_writer_append_int32(&writer, result);
++        }
++        if (result)
++            ERR("Audio HAL %s request failed for %s", am->slot, str);
++        result = gbinder_client_transact_sync_oneway(am->response, code, response);
++        if (result)
++            ERR("AIDL audio response failed for %s: %d", am->slot, result);
++        g_free(values);
++        gbinder_local_request_unref(response);
++    }
++    g_free(str);
++    return NULL; /* oneway */
++invalid:
++    ERR("Invalid AIDL audio request %s code %u", iface, code);
++    *status = GBINDER_STATUS_FAILED;
++    return NULL;
++}
++
++static gboolean
++am_client_aidl_connect(AmClient* am)
++{
++    GBinderLocalRequest* req;
++    GBinderRemoteReply* reply;
++    GBinderReader reader;
++    GBinderRemoteObject* remote;
++    gint32 exception;
++    int status = 0;
++
++    g_free(am->fqname);
++    am->fqname = g_strconcat(QCRIL_AUDIO_AIDL, "/", am->slot, NULL);
++    remote = gbinder_servicemanager_get_service_sync(am->sm, am->fqname, &status);
++    if (!remote)
++        return FALSE;
++    am->remote = gbinder_remote_object_ref(remote);
++    am->client = gbinder_client_new(remote, QCRIL_AUDIO_AIDL);
++    am->local = gbinder_servicemanager_new_local_object(am->sm,
++        QCRIL_REQUEST_AIDL, am_client_aidl_callback, am);
++    gbinder_local_object_set_stability(am->local, GBINDER_STABILITY_VINTF);
++    req = gbinder_client_new_request(am->client);
++    gbinder_local_request_append_local_object(req, am->local);
++    reply = gbinder_client_transact_sync_reply(am->client, 1, req, &status);
++    gbinder_local_request_unref(req);
++    if (reply) {
++        gbinder_remote_reply_init_reader(reply, &reader);
++        if (gbinder_reader_read_int32(&reader, &exception) && !exception) {
++            GBinderRemoteObject* response = gbinder_reader_read_object(&reader);
++            if (response) {
++                am->response = gbinder_client_new(response, QCRIL_RESPONSE_AIDL);
++                gbinder_remote_object_unref(response);
++            }
++        }
++        gbinder_remote_reply_unref(reply);
++    }
++    if (!am->response) {
++        ERR("AIDL audio registration failed for %s: %d", am->slot, status);
++        gbinder_local_object_drop(am->local);
++        am->local = NULL;
++        gbinder_client_unref(am->client);
++        am->client = NULL;
++        gbinder_remote_object_unref(am->remote);
++        am->remote = NULL;
++        return FALSE;
++    }
++    am->death_id = gbinder_remote_object_add_death_handler(am->remote,
++        am_remote_died, am);
++    /* Equivalent to Android AudioSystem's healthy server notification. */
++    req = gbinder_client_new_request(am->client);
++    gbinder_local_request_append_int32(req, 0); /* STATUS_OK */
++    status = gbinder_client_transact_sync_oneway(am->client, 2, req);
++    gbinder_local_request_unref(req);
++    DBG("Connected AIDL audio %s (status %d)", am->fqname, status);
++    return TRUE;
++}
++
+ static gboolean
+ am_client_connect(
+         AmClient* am)
+@@ -226,6 +365,11 @@ am_client_connect(
+     int status = 0;
+     int i;
+ 
++    if (am->remote)
++        return TRUE;
++    if (am->app->aidl)
++        return am_client_aidl_connect(am);
++
+     for (i = 0; qcril_iface_names[i].name; i++) {
+         const gchar *interface_name = qcril_iface_names[i].name;
+         const gchar *callback_name = qcril_iface_names[i].callback;
+@@ -304,7 +448,7 @@ am_client_new(
+ 
+     am->app = app;
+     am->slot = g_strdup(slot);
+-    am->sm = gbinder_servicemanager_ref(app->sm);
++
+     return am;
+ }
+ 
+@@ -317,6 +461,8 @@ am_client_connect_all(
+     for (i = clients; i; i = i->next) {
+         AmClient *am = i->data;
+ 
++        if (!am->sm)
++            am->sm = gbinder_servicemanager_ref(am->app->sm);
+         if (!am_client_connect(am)) {
+             DBG("Waiting for %s", am->fqname);
+             am->wait_id = gbinder_servicemanager_add_registration_handler(am->sm,
+@@ -337,8 +483,9 @@ am_client_free(
+     }
+     if (am->local) {
+         gbinder_local_object_drop(am->local);
+-        gbinder_client_unref(am->client);
+     }
++    gbinder_client_unref(am->client);
++    gbinder_client_unref(am->response);
+     gbinder_servicemanager_remove_handler(am->sm, am->wait_id);
+     gbinder_servicemanager_unref(am->sm);
+     g_free(am->fqname);
+@@ -423,6 +570,15 @@ parse_slots_from_binder_configuration_file(
+                                   G_KEY_FILE_NONE,
+                                   NULL)) {
+         gchar** groups = g_key_file_get_groups(config, NULL);
++        if (g_key_file_has_key(config, "Settings", "InterfaceType", NULL)) {
++            gchar* type = g_key_file_get_string(config, "Settings", "InterfaceType", NULL);
++            app->aidl = !g_strcmp0(type, "aidl");
++            g_free(type);
++        }
++        if (g_key_file_has_key(config, "Settings", "Device", NULL)) {
++            g_free(app->device);
++            app->device = g_key_file_get_string(config, "Settings", "Device", NULL);
++        }
+         gchar** name;
+         for (name = groups; *name; name++) {
+             /* Every group beyond 'Settings' is a binder slot name */
+@@ -502,9 +658,10 @@ app_qti_init(
+     _app.loop = mainloop;
+     _app.config = config;
+ 
+-    _app.sm = gbinder_servicemanager_new(config->device ? config->device : BINDER_DEVICE);
+     if (!app_parse_all_slots(&_app))
+         return FALSE;
++    _app.sm = gbinder_servicemanager_new(config->device ? config->device :
++        (_app.device ? _app.device : (_app.aidl ? "/dev/binder" : BINDER_DEVICE)));
+ 
+     if (_app.config->dummy_mode) {
+         ERR("Notice! HIDL helper doesn't have proper dummy mode.");
+@@ -533,6 +690,7 @@ app_qti_done(
+     g_slist_free_full(_app.clients, am_client_free);
+     if (_app.sm)
+         gbinder_servicemanager_unref(_app.sm);
++    g_free(_app.device);
+ 
+     return 0;
+ }
+diff --git a/src/passthrough-helper.c b/src/passthrough-helper.c
+index 3364b84..4df4d92 100644
+--- a/src/passthrough-helper.c
++++ b/src/passthrough-helper.c
+@@ -90,6 +90,44 @@ app_run(
+     g_source_remove(sigint);
+ }
+ 
++/* Older module-droid-hidl versions scan only the monolithic HIDL manifest
++ * and export "af" on AIDL devices whose services live in VINTF fragments.
++ * Extend that automatic detection here; an explicit --type remains honored. */
++static gboolean
++qti_manifest_file(const char* path)
++{
++    gchar* contents = NULL;
++    gboolean found = g_file_get_contents(path, &contents, NULL, NULL) &&
++        (strstr(contents, "vendor.qti.hardware.radio.am") ||
++         strstr(contents, "vendor.qti.qcril.am"));
++    g_free(contents);
++    return found;
++}
++
++static gboolean
++qti_manifest_available(void)
++{
++    const char* directory = "/vendor/etc/vintf/manifest";
++    GDir* dir;
++    const char* name;
++    gboolean found = FALSE;
++    if (qti_manifest_file("/vendor/etc/vintf/manifest.xml") ||
++        qti_manifest_file("/vendor/manifest.xml"))
++        return TRUE;
++    dir = g_dir_open(directory, 0, NULL);
++    if (!dir)
++        return FALSE;
++    while (!found && (name = g_dir_read_name(dir))) {
++        if (g_str_has_suffix(name, ".xml")) {
++            gchar* path = g_build_filename(directory, name, NULL);
++            found = qti_manifest_file(path);
++            g_free(path);
++        }
++    }
++    g_dir_close(dir);
++    return found;
++}
++
+ static gboolean
+ parse_app_type(
+         App *app,
+@@ -97,8 +135,13 @@ parse_app_type(
+ {
+     guint i;
+ 
+-    if (!type_str)
++    if (!type_str) {
+         type_str = g_getenv(ENV_AUDIOSYSTEM_PASSTHROUGH_TYPE);
++        if (_app_module &&
++            !g_strcmp0(type_str, AUDIOSYSTEM_PASSTHROUGH_IMPL_STR_AF) &&
++            qti_manifest_available())
++            type_str = AUDIOSYSTEM_PASSTHROUGH_IMPL_STR_QTI;
++    }
+ 
+     if (!type_str)
+         type_str = AUDIOSYSTEM_PASSTHROUGH_IMPL_STR_QTI;
